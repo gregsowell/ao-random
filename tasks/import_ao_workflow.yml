@@ -1,0 +1,130 @@
+---
+# Import (or update) one workflow JSON file into automation orchestrator.
+# Input:   workflow ({name, url, description?})
+# Output:  appends to _ao_loaded_workflows
+- name: Download {{ workflow.url | basename }}
+  ansible.builtin.uri:
+    url: "{{ workflow.url }}"
+    return_content: true
+  register: _wf_download
+
+- name: Parse {{ workflow.url | basename }}
+  ansible.builtin.set_fact:
+    _wf_source: "{{ _wf_download.content | from_json }}"
+    _wf_nodes: []
+
+# Exported files carry credential IDs from the source instance (or a
+# placeholder), and AAP execution nodes require one, so point every AAP
+# node at the demo AAP credential.
+- name: Attach the {{ ao_aap_credential_name }} credential to AAP nodes
+  ansible.builtin.set_fact:
+    _wf_nodes: >-
+      {{ _wf_nodes + [
+           node | combine({'parameters': {'credential_id': _ao_cred_id}}, recursive=true)
+           if node.type in ao_aap_node_types else node
+         ] }}
+  loop: "{{ _wf_source.nodes | default([]) }}"
+  loop_control:
+    loop_var: node
+    label: "{{ node.name | default(node.id) }}"
+
+- name: Build the workflow definition
+  vars:
+    _name: "{{ workflow.name | default(_wf_source.name) }}"
+  ansible.builtin.set_fact:
+    _wf_definition: >-
+      {{ _wf_source | combine({
+           'schema_version': _wf_source.schema_version | default('2.0.0'),
+           'name': _name,
+           'description': workflow.description | default(_wf_source.description | default(_name)),
+           'nodes': _wf_nodes
+         }) }}
+
+- name: List existing workflows
+  ansible.builtin.uri:
+    url: "{{ _ao_api }}/workflows?limit=100"
+    headers: "{{ _ao_headers }}"
+    validate_certs: "{{ ao_validate_certs }}"
+  register: _wf_list
+
+- name: Check for an existing {{ _wf_definition.name }} workflow
+  ansible.builtin.set_fact:
+    _wf_existing: >-
+      {{ _wf_list.json.resources
+         | selectattr('name', 'equalto', _wf_definition.name)
+         | first | default({}) }}
+
+- name: Import workflow {{ _wf_definition.name }}
+  ansible.builtin.uri:
+    url: "{{ _ao_api }}/workflows"
+    method: POST
+    headers: "{{ _ao_headers }}"
+    body_format: json
+    body:
+      name: "{{ _wf_definition.name }}"
+      description: "{{ _wf_definition.description }}"
+      project_id: "{{ _ao_project.id }}"
+      is_import: true
+      workflow_definition: "{{ _wf_definition }}"
+    validate_certs: "{{ ao_validate_certs }}"
+    status_code: [200, 201]
+  register: _wf_created
+  when: not _wf_existing
+
+# PATCH creates a new draft version when the definition changed.
+- name: Update workflow {{ _wf_definition.name }}
+  ansible.builtin.uri:
+    url: "{{ _ao_api }}/workflows/{{ _wf_existing.id }}"
+    method: PATCH
+    headers: "{{ _ao_headers }}"
+    body_format: json
+    body:
+      workflow_definition: "{{ _wf_definition }}"
+    validate_certs: "{{ ao_validate_certs }}"
+    status_code: 200
+  register: _wf_updated
+  when: _wf_existing | length > 0
+
+- name: Remember the workflow ID
+  ansible.builtin.set_fact:
+    _wf_id: "{{ _wf_existing.id if _wf_existing else _wf_created.json.id }}"
+    _wf_status: "{{ 'updated' if _wf_existing else 'imported' }}"
+
+# Publishing fails validation until the referenced AAP job templates,
+# LLM, and MCP integrations exist, so a failure here only warns.
+- name: Publish workflow {{ _wf_definition.name }}
+  when: ao_publish_workflows | bool
+  block:
+    - name: List versions of {{ _wf_definition.name }}
+      ansible.builtin.uri:
+        url: "{{ _ao_api }}/workflows/{{ _wf_id }}/versions?limit=100"
+        headers: "{{ _ao_headers }}"
+        validate_certs: "{{ ao_validate_certs }}"
+      register: _wf_versions
+
+    - name: Publish the latest version of {{ _wf_definition.name }}
+      ansible.builtin.uri:
+        url: "{{ _ao_api }}/workflows/{{ _wf_id }}/versions/{{ _wf_versions.json.resources | map(attribute='version') | max }}/publish"
+        method: POST
+        headers: "{{ _ao_headers }}"
+        body_format: json
+        body:
+          publish_name: Loaded by ao_setup.yml
+        validate_certs: "{{ ao_validate_certs }}"
+        status_code: [200, 201]
+
+    - name: Record the publish
+      ansible.builtin.set_fact:
+        _wf_status: "{{ _wf_status }} and published"
+  rescue:
+    - name: Warn that {{ _wf_definition.name }} was not published
+      ansible.builtin.debug:
+        msg: >-
+          {{ _wf_definition.name }} was saved as a draft but not published:
+          {{ ansible_failed_result.json | default(ansible_failed_result.msg) }}
+
+- name: Record {{ _wf_definition.name }}
+  ansible.builtin.set_fact:
+    _ao_loaded_workflows: >-
+      {{ _ao_loaded_workflows | default([])
+         + ['Workflow: ' ~ _wf_definition.name ~ ' (' ~ _wf_id ~ ') ' ~ _wf_status] }}

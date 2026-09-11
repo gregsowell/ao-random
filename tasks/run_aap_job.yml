@@ -1,0 +1,70 @@
+---
+# Launch a job template on the demo AAP by name and wait for it to finish.
+# Inputs:  _jt_name, _jt_extra_vars
+# Output:  _aap_job (the finished job record)
+- name: Look up job template {{ _jt_name }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/job_templates/?name={{ _jt_name | urlencode }}"
+    user: "{{ demo_aap_username }}"
+    password: "{{ demo_aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ demo_aap_validate_certs }}"
+  register: _jt_lookup
+  # Templates created by the APD setup can take a moment to appear.
+  until: _jt_lookup.json.count | default(0) == 1
+  retries: 10
+  delay: 15
+  failed_when: false
+
+- name: Verify job template {{ _jt_name }} exists
+  ansible.builtin.assert:
+    that:
+      - _jt_lookup.json.count | default(0) == 1
+    fail_msg: >-
+      Expected one job template named '{{ _jt_name }}' on {{ _aap_base }}
+      (HTTP {{ _jt_lookup.status | default('n/a') }},
+      found {{ _jt_lookup.json.count | default(0) }}).
+    quiet: true
+
+- name: Launch job template {{ _jt_name }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/job_templates/{{ _jt_lookup.json.results[0].id }}/launch/"
+    method: POST
+    user: "{{ demo_aap_username }}"
+    password: "{{ demo_aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ demo_aap_validate_certs }}"
+    body_format: json
+    body:
+      extra_vars: "{{ _jt_extra_vars }}"
+    status_code: 201
+  register: _jt_launch
+
+- name: Show the job link
+  ansible.builtin.debug:
+    msg: "Launched job {{ _jt_launch.json.job }}: {{ _aap_base }}/execution/jobs/playbook/{{ _jt_launch.json.job }}/output"
+
+- name: Wait for job {{ _jt_launch.json.job }} to finish
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/jobs/{{ _jt_launch.json.job }}/"
+    user: "{{ demo_aap_username }}"
+    password: "{{ demo_aap_password }}"
+    force_basic_auth: true
+    validate_certs: "{{ demo_aap_validate_certs }}"
+  register: _job_poll
+  until: _job_poll.json.status | default('') in ['successful', 'failed', 'error', 'canceled']
+  retries: "{{ aap_job_poll_retries }}"
+  delay: "{{ aap_job_poll_delay }}"
+
+- name: Verify job {{ _jt_launch.json.job }} succeeded
+  ansible.builtin.assert:
+    that:
+      - _job_poll.json.status == 'successful'
+    fail_msg: >-
+      '{{ _jt_name }}' finished with status {{ _job_poll.json.status }}:
+      {{ _aap_base }}/execution/jobs/playbook/{{ _jt_launch.json.job }}/output
+    quiet: true
+
+- name: Remember the finished job
+  ansible.builtin.set_fact:
+    _aap_job: "{{ _job_poll.json }}"

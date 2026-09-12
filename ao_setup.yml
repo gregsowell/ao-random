@@ -245,26 +245,62 @@
         validate_certs: "{{ ao_validate_certs }}"
       register: _ao_cred_type
 
-    # Map our values onto the type's field IDs so this does not depend on
-    # exact key names. Set ao_aap_credential_inputs to bypass the mapping.
-    - name: Build the AAP credential inputs
+    # AO documents inputs as a free-form object, so normalize the shapes it
+    # can take: {fields: [...]}, {properties: {...}}, a bare field mapping,
+    # or a bare list of fields.
+    - name: Normalize the credential type input schema
       vars:
         _inputs: "{{ _ao_cred_type.json.inputs | default({}) }}"
-        _fields: "{{ (_inputs.fields | map(attribute='id') | list) if _inputs.fields is defined else (_inputs.properties | default({}) | list) }}"
       ansible.builtin.set_fact:
-        _ao_cred_fields: "{{ _fields }}"
+        _ao_cred_input_schema: "{{ _inputs }}"
+        _ao_cred_fields: []
+        _ao_cred_field_src: >-
+          {{ _inputs.fields if _inputs.fields is defined
+             else (_inputs.properties | list) if _inputs.properties is defined
+             else (_inputs | list) if _inputs is mapping
+             else _inputs }}
+
+    - name: Collect the credential type input field names
+      ansible.builtin.set_fact:
+        _ao_cred_fields: >-
+          {{ _ao_cred_fields + [field.id | default(field.name | default('')) if field is mapping else field] }}
+      loop: "{{ _ao_cred_field_src }}"
+      loop_control:
+        loop_var: field
+
+    - name: Show the credential type input fields
+      ansible.builtin.debug:
+        msg: "AAP credential type input fields: {{ _ao_cred_fields | join(', ') | default('(none)', true) }}"
+
+    # Only field names the type actually declares are sent, so a mismatch
+    # fails here with the schema in hand instead of as a 422 from the API.
+    - name: Map values onto the credential type fields
+      vars:
+        _host_key: "{{ _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | first | default('') }}"
+        _user_key: "{{ _ao_cred_fields | select('search', '(?i)user') | first | default('') }}"
+        _pass_key: "{{ _ao_cred_fields | select('search', '(?i)passw') | first | default('') }}"
+        _verify_key: "{{ _ao_cred_fields | select('search', '(?i)verify|ssl|tls') | first | default('') }}"
+      ansible.builtin.set_fact:
         _ao_cred_inputs: >-
-          {{ ao_aap_credential_inputs | default({
-               (_fields | select('search', '(?i)host|url') | first | default('host')): _aap_base,
-               (_fields | select('search', '(?i)user') | first | default('username')): demo_aap_username,
-               (_fields | select('search', '(?i)passw') | first | default('password')): demo_aap_password,
-               (_fields | select('search', '(?i)verify|ssl') | first | default('verify_ssl')): ao_aap_credential_verify_ssl | bool
-             }, true) }}
+          {{ ao_aap_credential_inputs | default(
+               ({_host_key: _aap_base} if _host_key else {})
+               | combine({_user_key: demo_aap_username} if _user_key else {})
+               | combine({_pass_key: demo_aap_password} if _pass_key else {})
+               | combine({_verify_key: ao_aap_credential_verify_ssl | bool} if _verify_key else {}),
+               true) }}
       no_log: true
 
-    - name: Show the credential type fields
-      ansible.builtin.debug:
-        msg: "AAP credential type fields: {{ _ao_cred_fields | join(', ') }}"
+    - name: Verify the credential inputs could be mapped
+      ansible.builtin.assert:
+        that:
+          - _ao_cred_inputs | length > 0
+          - ao_aap_credential_inputs is defined or _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | list | length > 0
+        fail_msg: >-
+          Could not map the demo AAP URL onto the credential type's input fields
+          ({{ _ao_cred_fields | join(', ') | default('(none)', true) }}).
+          Input schema: {{ _ao_cred_input_schema }}.
+          Set ao_aap_credential_inputs to the correct field names and rerun.
+        quiet: true
 
     - name: List credentials
       ansible.builtin.uri:

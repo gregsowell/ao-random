@@ -91,9 +91,11 @@ ansible-playbook ao_setup.yml -e demo_aap_url=... -e demo_aap_password=... -e ru
 AO 2026.8 REST API documentation. It has not been tested against a live AO instance yet, so
 check these on the first run:
 
-- The AAP credential type's input field IDs are read at runtime and mapped by name
-  (`host`/`url`, `user`, `passw`, `verify`/`ssl`). The run prints the discovered field IDs.
-  If the mapping is wrong, set `ao_aap_credential_inputs`.
+- The AAP credential type's input field names are not in the docs or the OpenAPI spec
+  (`inputs` is a free-form object validated server-side), so the playbook reads them from
+  `GET /credential_types/{id}` at run time, prints them, and sends **only** field names the
+  type declares. If it cannot identify the AAP URL field, the run stops and prints the schema;
+  set `ao_aap_credential_inputs` to the correct names and rerun.
 - The default project is assumed to be named `Default`. If it isn't found, the run fails and
   lists the available project names.
 - Publishing reads the `version` field from `GET /workflows/{id}/versions`.

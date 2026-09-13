@@ -35,10 +35,11 @@
     ao_login_delay: 15
     ao_project_name: Default
     ao_aap_credential_name: Demo AAP
+    ao_aap_integration_name: Demo AAP
     ao_aap_credential_verify_ssl: "{{ demo_aap_validate_certs }}"
     ao_aap_node_types:
       - aap_job_template
-      - aap_workflow_template
+      - aap_workflow_job_template
     ao_publish_workflows: false
     show_ao_password: false
 
@@ -290,13 +291,19 @@
                true) }}
       no_log: true
 
+    # AO 2026.8 AAP credentials hold auth only (username/password or an OAuth
+    # token); the AAP URL lives on the integration. Older builds also had a
+    # host field, which is filled in above when present.
     - name: Verify the credential inputs could be mapped
       ansible.builtin.assert:
         that:
           - _ao_cred_inputs | length > 0
-          - ao_aap_credential_inputs is defined or _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | list | length > 0
+          - >-
+            ao_aap_credential_inputs is defined
+            or (_ao_cred_fields | select('search', '(?i)user') | list | length > 0
+                and _ao_cred_fields | select('search', '(?i)passw') | list | length > 0)
         fail_msg: >-
-          Could not map the demo AAP URL onto the credential type's input fields
+          Could not map the demo AAP username and password onto the credential type's input fields
           ({{ _ao_cred_fields | join(', ') | default('(none)', true) }}).
           Input schema: {{ _ao_cred_input_schema }}.
           Set ao_aap_credential_inputs to the correct field names and rerun.
@@ -351,6 +358,68 @@
       ansible.builtin.set_fact:
         _ao_cred_id: "{{ _ao_cred_result.json.id | default(_ao_cred_existing.id) }}"
 
+    # The credential holds only auth; the integration holds the AAP URL and
+    # TLS settings. AAP workflow steps reference both.
+    - name: List integrations
+      ansible.builtin.uri:
+        url: "{{ _ao_api }}/integrations?limit=100"
+        headers: "{{ _ao_headers }}"
+        validate_certs: "{{ ao_validate_certs }}"
+      register: _ao_integrations
+
+    - name: Check for an existing {{ ao_aap_integration_name }} integration
+      ansible.builtin.set_fact:
+        _ao_integration_existing: >-
+          {{ _ao_integrations.json.resources
+             | selectattr('name', 'equalto', ao_aap_integration_name)
+             | first | default({}) }}
+
+    - name: Create or update the {{ ao_aap_integration_name }} integration
+      vars:
+        _update:
+          configuration:
+            integration_type: ansible_automation_platform
+            base_url: "{{ _aap_base }}"
+            insecure_skip_tls_verify: "{{ not (demo_aap_validate_certs | bool) }}"
+          management_credential_id: "{{ _ao_cred_id }}"
+          enabled: true
+      ansible.builtin.uri:
+        url: "{{ _ao_api }}/integrations{{ ('/' ~ _ao_integration_existing.id) if _ao_integration_existing else '' }}"
+        method: "{{ 'PATCH' if _ao_integration_existing else 'POST' }}"
+        headers: "{{ _ao_headers }}"
+        body_format: json
+        body: >-
+          {{ _update if _ao_integration_existing else _update | combine({
+               'name': ao_aap_integration_name,
+               'description': 'Demo AAP instance ' ~ _aap_base,
+               'integration_type': 'ansible_automation_platform',
+               'scope': 'global'
+             }) }}
+        validate_certs: "{{ ao_validate_certs }}"
+        status_code: [200, 201]
+      register: _ao_integration_result
+
+    - name: Remember the integration ID
+      ansible.builtin.set_fact:
+        _ao_integration_id: "{{ _ao_integration_result.json.id | default(_ao_integration_existing.id) }}"
+
+    # A failed health check doesn't block the import; the integration can be
+    # fixed later without re-importing the workflows.
+    - name: Validate the {{ ao_aap_integration_name }} integration
+      ansible.builtin.uri:
+        url: "{{ _ao_api }}/integrations/{{ _ao_integration_id }}/validate"
+        method: POST
+        headers: "{{ _ao_headers }}"
+        validate_certs: "{{ ao_validate_certs }}"
+      register: _ao_integration_validate
+      failed_when: false
+
+    - name: Show the integration health check
+      ansible.builtin.debug:
+        msg: >-
+          {{ ao_aap_integration_name }} health check (HTTP {{ _ao_integration_validate.status }}):
+          {{ _ao_integration_validate.json | default(_ao_integration_validate.msg) }}
+
     - name: Load workflows
       ansible.builtin.include_tasks: tasks/import_ao_workflow.yml
       loop: "{{ ao_workflows }}"
@@ -367,3 +436,4 @@
           - "Username: {{ ao_username }}"
           - "Password: {{ ao_password if show_ao_password | bool else 'see the ' ~ ao_access_task ~ ' task in ' ~ _aap_base ~ '/execution/jobs/playbook/' ~ _aap_job.id ~ '/output' }}"
           - "Credential: {{ ao_aap_credential_name }} ({{ _ao_cred_id }}) in project {{ _ao_project.name }}"
+          - "Integration: {{ ao_aap_integration_name }} ({{ _ao_integration_id }}) for {{ _aap_base }}"

@@ -12,10 +12,12 @@ AAP instance and loads base configuration into it. It runs against `localhost` a
    (the install can take a long time; polling allows up to 2 hours).
 3. Reads the `Display access information` task output from that install job and parses the AO
    URL, username, and password.
-4. **AO**: logs in (retrying while AO finishes starting), then creates or updates an
-   Ansible Automation Platform credential named `Demo AAP` that points at the demo AAP.
+4. **AO**: logs in (retrying while AO finishes starting), then creates or updates:
+   - a `Demo AAP` credential holding the demo AAP username and password
+   - a global `Demo AAP` integration holding the demo AAP URL, using that credential for
+     health checks. The run then triggers the integration's health check and prints the result.
 5. **AO**: imports two workflows into the `Default` project and points every AAP job template
-   step at the `Demo AAP` credential:
+   step at the `Demo AAP` integration and credential:
    - [disk-demo-101.json](https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/disk-utilization/ao/disk-demo-101.json) as *Disk Utilization Demo 101*
    - [rhel-cve-remediation.json](https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/cve-remediation/ao/rhel-cve-remediation.json) as *RHEL CVE Remediation - Intelligent Patching*
 
@@ -57,6 +59,7 @@ ansible-playbook ao_setup.yml -e demo_aap_url=https://aap.apps.cluster-xxxx.exam
 | `ao_validate_certs` | `false` | Verify TLS for AO. |
 | `ao_project_name` | `Default` | AO project that owns the credential and workflows. |
 | `ao_aap_credential_name` | `Demo AAP` | Name of the AAP credential created in AO. |
+| `ao_aap_integration_name` | `Demo AAP` | Name of the AAP integration created in AO. TLS verification follows `demo_aap_validate_certs`. |
 | `ao_aap_credential_inputs` | *(discovered)* | Override the credential inputs dict if the field mapping is wrong. |
 | `ao_workflows` | the two workflows above | List of `{name, url, description?}` to import. |
 | `ao_publish_workflows` | `false` | Try to publish after import. A publish failure only warns. |
@@ -73,10 +76,6 @@ ansible-playbook ao_setup.yml -e demo_aap_url=... -e demo_aap_password=... -e ru
 
 ## After it runs
 
-- **Add the AAP integration.** AAP job template steps select an integration in the builder,
-  and the AO docs don't publish the API fields for creating one, so this step is manual. In AO,
-  go to **Configuration > Integrations > Configure integration > Ansible Automation Platform**.
-  Set the AAP URL to the demo AAP URL and the health check credential to `Demo AAP`.
 - **Workflows import as drafts.** They won't pass publish validation until their dependencies
   exist:
   - The disk demo calls job templates that the infrastructure demo doesn't create:
@@ -88,14 +87,18 @@ ansible-playbook ao_setup.yml -e demo_aap_url=... -e demo_aap_password=... -e ru
 
 ## Built against
 
-AO 2026.8 REST API documentation. It has not been tested against a live AO instance yet, so
-check these on the first run:
+AO 2026.8 REST API documentation and a live instance's OpenAPI spec
+(`/api_docs/v1/openapi.json`). The demo AAP stages, AO login, and the project and credential
+type lookups have run against a live instance. Check these on the next run:
 
-- The AAP credential type's input field names are not in the docs or the OpenAPI spec
-  (`inputs` is a free-form object validated server-side), so the playbook reads them from
-  `GET /credential_types/{id}` at run time, prints them, and sends **only** field names the
-  type declares. If it cannot identify the AAP URL field, the run stops and prints the schema;
-  set `ao_aap_credential_inputs` to the correct names and rerun.
+- On AO 2026.8 the AAP credential type holds auth only (`username`, `password`, `oauth_token`),
+  and the AAP URL and TLS settings live on the integration. The docs still list "AAP Host" and
+  "Verify SSL" credential fields, so the playbook reads the credential type's fields at run
+  time and sends **only** the fields it declares. It fills in a host field only on builds that
+  have one. If the username and password can't be mapped, the run stops and prints the schema;
+  set `ao_aap_credential_inputs` and rerun.
+- The integration and workflow request bodies are checked against that instance's OpenAPI
+  schemas, but integration creation and workflow import haven't run live yet.
 - The default project is assumed to be named `Default`. If it isn't found, the run fails and
   lists the available project names.
 - Publishing reads the `version` field from `GET /workflows/{id}/versions`.

@@ -13,14 +13,17 @@
     _wf_source: "{{ _wf_download.content | from_json }}"
     _wf_nodes: []
 
-# Exported files carry credential IDs from the source instance (or a
-# placeholder), and AAP execution nodes require one, so point every AAP
-# node at the demo AAP credential.
-- name: Attach the {{ ao_aap_credential_name }} credential to AAP nodes
+# Exported files carry credential and integration IDs from the source
+# instance (or a placeholder). AAP execution nodes need both: the
+# integration resolves the AAP URL and the credential authenticates.
+- name: Attach the demo AAP integration and credential to AAP nodes
   ansible.builtin.set_fact:
     _wf_nodes: >-
       {{ _wf_nodes + [
-           node | combine({'parameters': {'credential_id': _ao_cred_id}}, recursive=true)
+           node | combine({'parameters': {
+             'credential_id': _ao_cred_id,
+             'integration_id': _ao_integration_id
+           }}, recursive=true)
            if node.type in ao_aap_node_types else node
          ] }}
   loop: "{{ _wf_source.nodes | default([]) }}"

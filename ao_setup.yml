@@ -47,7 +47,6 @@
       - aap_job_template
       - aap_workflow_job_template
     ao_publish_workflows: false
-    show_ao_password: false
 
     ao_workflows:
       - name: Disk Utilization Demo 101
@@ -467,8 +466,8 @@
             msg: "{{ _summary + (_ao_loaded_workflows | default([])) }}"
           vars:
             _summary:
-              - "Automation orchestrator: {{ ao_url }}"
+              - "Automation orchestrator URL: {{ ao_url }}"
               - "Username: {{ ao_username }}"
-              - "Password: {{ ao_password if show_ao_password | bool else 'see the ' ~ ao_access_task ~ ' task in ' ~ _aap_base ~ '/execution/jobs/playbook/' ~ _ao_install_job.id ~ '/output' }}"
+              - "Password: {{ ao_password }}"
               - "Credential: {{ ao_aap_credential_name }} ({{ _ao_cred_id }}) in project {{ _ao_project.name }}"
               - "Integration: {{ ao_aap_integration_name }} ({{ _ao_integration_id }}) for {{ _aap_base }}"

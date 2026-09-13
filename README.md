@@ -63,7 +63,6 @@ ansible-playbook ao_setup.yml -e demo_aap_url=https://aap.apps.cluster-xxxx.exam
 | `ao_aap_credential_inputs` | *(discovered)* | Override the credential inputs dict if the field mapping is wrong. |
 | `ao_workflows` | the two workflows above | List of `{name, url, description?}` to import. |
 | `ao_publish_workflows` | `false` | Try to publish after import. A publish failure only warns. |
-| `show_ao_password` | `false` | Print the AO password in the summary. |
 
 ## Tags
 

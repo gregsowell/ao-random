@@ -31,7 +31,120 @@
       "type": "agentic",
       "name": "AI Repair EE Build Failure",
       "parameters": {
-        "prompt": "examine the contents of ${activity_dae50503_a40d_4234_b92f_c2b347df308e.artifacts} and determine what changes need to be made to the execution-environments.yml file to successfully build the ansible EE.",
+        "prompt": "You are an Ansible execution environment (EE) build engineer. An ansible-builder build of an execution environment failed. Diagnose the failure and propose the smallest change to execution-environment.yml that will make the next build succeed.\n\nBuild job:\n- Job ID: ${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_id}\n- Status: ${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_status}\n- Job URL: ${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_url}\n- First run of this workflow: ${trigger.first_run}\n\nBuild artifacts (set_stats data published by the build job, such as the current execution-environment.yml and the tail of the ansible-builder and podman build log):\n${activity_dae50503_a40d_4234_b92f_c2b347df308e.artifacts}\n\nInstructions:\n1. Base your analysis only on the job data and artifacts above. Do not invent errors that are not in the log. If the artifacts don't contain enough detail to identify the cause, set failure_category to \"insufficient_data\", describe what is missing in root_cause, and set retry_recommended to false.\n2. Find the first real error in the build log. Ignore later errors that cascade from it.\n3. Classify the failure using the failure_category values.\n4. Propose the smallest set of changes to execution-environment.yml (ansible-builder version 3 format) that fixes it. Typical fixes: pin or relax a Python package version, add a missing system package to bindep, correct a Galaxy collection name or version, change the base image, or add a build step. Only remove a dependency if it is the cause.\n5. Quote the log lines that show the root cause verbatim in error_excerpt.\n6. Return the complete corrected execution-environment.yml in updated_execution_environment_yml so the next build can use it as-is.\n7. Set retry_recommended to true only if you are confident the change addresses the root cause. Set requires_human_review to true if the fix involves credentials, registry authentication, network access, or a base image change.",
+        "responseSchema": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "One or two sentences on why the build failed and what the fix does."
+            },
+            "failure_category": {
+              "type": "string",
+              "enum": [
+                "python_dependency",
+                "system_package",
+                "galaxy_collection",
+                "base_image",
+                "registry_auth",
+                "build_step",
+                "ee_definition_syntax",
+                "network",
+                "insufficient_data",
+                "other"
+              ],
+              "description": "Primary cause of the build failure."
+            },
+            "root_cause": {
+              "type": "string",
+              "description": "The first real error from the build log and why it happened."
+            },
+            "error_excerpt": {
+              "type": "string",
+              "description": "The log lines that show the root cause, copied verbatim."
+            },
+            "confidence": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Confidence from 0 to 1 that the proposed changes fix the build."
+            },
+            "changes": {
+              "type": "array",
+              "description": "Minimal changes to execution-environment.yml, in the order to apply them.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "section": {
+                    "type": "string",
+                    "enum": [
+                      "images",
+                      "dependencies.python",
+                      "dependencies.system",
+                      "dependencies.galaxy",
+                      "dependencies.ansible_core",
+                      "dependencies.ansible_runner",
+                      "additional_build_steps",
+                      "build_arg_defaults",
+                      "options"
+                    ],
+                    "description": "Section of execution-environment.yml to change."
+                  },
+                  "action": {
+                    "type": "string",
+                    "enum": [
+                      "add",
+                      "update",
+                      "remove"
+                    ],
+                    "description": "What to do to the item."
+                  },
+                  "item": {
+                    "type": "string",
+                    "description": "Package, collection, image, or setting being changed, for example jmespath or community.general."
+                  },
+                  "from_value": {
+                    "type": "string",
+                    "description": "Current value or version constraint. Empty when adding."
+                  },
+                  "to_value": {
+                    "type": "string",
+                    "description": "New value or version constraint. Empty when removing."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "description": "Why this change fixes the failure."
+                  }
+                },
+                "required": [
+                  "section",
+                  "action",
+                  "item",
+                  "reason"
+                ]
+              }
+            },
+            "updated_execution_environment_yml": {
+              "type": "string",
+              "description": "The complete corrected execution-environment.yml content."
+            },
+            "retry_recommended": {
+              "type": "boolean",
+              "description": "True when the build should be retried with the updated definition."
+            },
+            "requires_human_review": {
+              "type": "boolean",
+              "description": "True when the fix touches credentials, registry authentication, network access, or the base image."
+            }
+          },
+          "required": [
+            "summary",
+            "failure_category",
+            "root_cause",
+            "changes",
+            "retry_recommended"
+          ]
+        },
         "tool_selection_strategy": "NONE"
       },
       "settings": {},
@@ -77,7 +190,7 @@
       "type": "condition",
       "name": "Previous Completed Succesfully",
       "parameters": {
-        "condition": "${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_status} == true"
+        "condition": "${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_status} == 'successful'"
       },
       "position": {
         "x": 469.93546136940165,

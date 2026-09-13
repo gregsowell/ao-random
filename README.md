@@ -65,14 +65,29 @@ ansible-playbook ao_setup.yml -e demo_aap_url=https://aap.apps.cluster-xxxx.exam
 | `ao_publish_workflows` | `false` | Try to publish after import. A publish failure only warns. |
 | `show_ao_password` | `false` | Print the AO password in the summary. |
 
-## Reruns
+## Tags
 
-The playbook can be rerun safely: the credential is updated in place, and a workflow that
-already exists (matched by name) gets a new draft version instead of a duplicate.
+| Tag | Runs |
+|---|---|
+| `full` | Everything: the APD setup, the AO install, and the AO configuration. Same as running with no tags. |
+| `aoconfig` | Only the AO configuration: reading the access details, then the credential, integration, and workflows. |
+
+`aoconfig` skips both demo AAP jobs and reads the AO URL and password from the **last successful**
+`Infrastructure | Automation Orchestrator | Install` job, so AO must already be installed. It
+still runs the short setup tasks that check the required variables and find the demo AAP API.
 
 ```bash
-ansible-playbook ao_setup.yml -e demo_aap_url=... -e demo_aap_password=... -e run_apd_setup=false -e run_ao_install=false
+ansible-playbook ao_setup.yml --tags aoconfig -e demo_aap_url=... -e demo_aap_password=...
 ```
+
+On a job template, set **Job tags** to `aoconfig` (or enable *Prompt on launch* for job tags).
+
+## Reruns
+
+The playbook can be rerun safely: the credential and integration are updated in place, and a
+workflow that already exists (matched by name) gets a new draft version instead of a duplicate.
+`run_apd_setup=false` and `run_ao_install=false` still skip either demo AAP job individually
+under `full`.
 
 ## After it runs
 

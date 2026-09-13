@@ -5,6 +5,11 @@
 # Required extra vars:
 #   demo_aap_url       URL of the demo AAP instance
 #   demo_aap_password  admin password for the demo AAP instance
+#
+# Tags:
+#   full      everything (same as running with no tags)
+#   aoconfig  only the AO configuration; reads the AO access details from the
+#             last successful install job, so AO must already be installed
 - name: Provision and configure automation orchestrator
   hosts: localhost
   connection: local
@@ -20,8 +25,9 @@
     ao_install_template: "Infrastructure | Automation Orchestrator | Install"
     ao_access_task: "Display access information"
 
-    # Set either to false on a rerun to skip that stage. With run_ao_install
-    # false, access details come from the last successful install job.
+    # Set either to false to skip that job under the full tag. When the
+    # install doesn't run, access details come from the last successful
+    # install job.
     run_apd_setup: true
     run_ao_install: true
 
@@ -50,390 +56,419 @@
         url: https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/cve-remediation/ao/rhel-cve-remediation.json
 
   tasks:
-    - name: Verify required variables were supplied
-      ansible.builtin.assert:
-        that:
-          - demo_aap_url | default('') | trim | length > 0
-          - demo_aap_password | default('') | length > 0
-        fail_msg: Supply demo_aap_url and demo_aap_password at run time.
-        quiet: true
+    # ======================================================================
+    # Demo AAP connection, needed by both tags
+    # ======================================================================
+    - name: Prepare the demo AAP connection
+      tags: [full, aoconfig]
+      block:
+        - name: Verify required variables were supplied
+          ansible.builtin.assert:
+            that:
+              - demo_aap_url | default('') | trim | length > 0
+              - demo_aap_password | default('') | length > 0
+            fail_msg: Supply demo_aap_url and demo_aap_password at run time.
+            quiet: true
+
+        - name: Normalize the demo AAP URL
+          vars:
+            _raw_url: "{{ demo_aap_url | trim }}"
+            _full_url: "{{ _raw_url if '://' in _raw_url else 'https://' ~ _raw_url }}"
+          ansible.builtin.set_fact:
+            _aap_base: "{{ _full_url | ansible.builtin.urlsplit('scheme') }}://{{ _full_url | ansible.builtin.urlsplit('netloc') }}"
+
+        - name: Detect the automation controller API path
+          ansible.builtin.uri:
+            url: "{{ _aap_base }}/api/controller/v2/ping/"
+            validate_certs: "{{ demo_aap_validate_certs }}"
+            status_code: [200, 404]
+          register: _aap_ping
+
+        - name: Set the automation controller API base
+          ansible.builtin.set_fact:
+            _aap_api: "{{ _aap_base }}{{ '/api/controller/v2' if _aap_ping.status == 200 else '/api/v2' }}"
 
     # ======================================================================
     # Demo AAP: run the APD setup and the AO install
     # ======================================================================
-    - name: Normalize the demo AAP URL
-      vars:
-        _raw_url: "{{ demo_aap_url | trim }}"
-        _full_url: "{{ _raw_url if '://' in _raw_url else 'https://' ~ _raw_url }}"
-      ansible.builtin.set_fact:
-        _aap_base: "{{ _full_url | ansible.builtin.urlsplit('scheme') }}://{{ _full_url | ansible.builtin.urlsplit('netloc') }}"
-
-    - name: Detect the automation controller API path
-      ansible.builtin.uri:
-        url: "{{ _aap_base }}/api/controller/v2/ping/"
-        validate_certs: "{{ demo_aap_validate_certs }}"
-        status_code: [200, 404]
-      register: _aap_ping
-
-    - name: Set the automation controller API base
-      ansible.builtin.set_fact:
-        _aap_api: "{{ _aap_base }}{{ '/api/controller/v2' if _aap_ping.status == 200 else '/api/v2' }}"
-
-    - name: Run {{ apd_setup_template }} with demo={{ apd_setup_demo }}
-      ansible.builtin.include_tasks: tasks/run_aap_job.yml
-      vars:
-        _jt_name: "{{ apd_setup_template }}"
-        _jt_extra_vars:
-          demo: "{{ apd_setup_demo }}"
-      when: run_apd_setup | bool
-
-    - name: Run {{ ao_install_template }}
-      ansible.builtin.include_tasks: tasks/run_aap_job.yml
-      vars:
-        _jt_name: "{{ ao_install_template }}"
-        _jt_extra_vars: {}
-      when: run_ao_install | bool
-
-    - name: Use the last successful install job
-      when: not (run_ao_install | bool)
+    # Tags on include_tasks apply only to the include, so apply them to the
+    # included tasks too.
+    - name: Provision automation orchestrator on the demo AAP
+      tags: [full]
       block:
-        - name: Look up job template {{ ao_install_template }}
-          ansible.builtin.uri:
-            url: "{{ _aap_api }}/job_templates/?name={{ ao_install_template | urlencode }}"
-            user: "{{ demo_aap_username }}"
-            password: "{{ demo_aap_password }}"
-            force_basic_auth: true
-            validate_certs: "{{ demo_aap_validate_certs }}"
-          register: _install_jt
+        - name: Run {{ apd_setup_template }} with demo={{ apd_setup_demo }}
+          ansible.builtin.include_tasks:
+            file: tasks/run_aap_job.yml
+            apply:
+              tags: [full]
+          vars:
+            _jt_name: "{{ apd_setup_template }}"
+            _jt_extra_vars:
+              demo: "{{ apd_setup_demo }}"
+          when: run_apd_setup | bool
 
-        - name: Look up the last successful install job
-          ansible.builtin.uri:
-            url: "{{ _aap_api }}/job_templates/{{ _install_jt.json.results[0].id }}/jobs/?status=successful&order_by=-finished&page_size=1"
-            user: "{{ demo_aap_username }}"
-            password: "{{ demo_aap_password }}"
-            force_basic_auth: true
-            validate_certs: "{{ demo_aap_validate_certs }}"
-          register: _install_jobs
-          when: _install_jt.json.count | default(0) == 1
-
-        - name: Verify a successful install job exists
-          ansible.builtin.assert:
-            that:
-              - _install_jobs.json.results | default([]) | length > 0
-            fail_msg: >-
-              No successful '{{ ao_install_template }}' job found on {{ _aap_base }}.
-              Rerun with run_ao_install=true.
-            quiet: true
+        - name: Run {{ ao_install_template }}
+          ansible.builtin.include_tasks:
+            file: tasks/run_aap_job.yml
+            apply:
+              tags: [full]
+          vars:
+            _jt_name: "{{ ao_install_template }}"
+            _jt_extra_vars: {}
+          when: run_ao_install | bool
 
         - name: Remember the install job
           ansible.builtin.set_fact:
-            _aap_job: "{{ _install_jobs.json.results[0] }}"
-
-    - name: Read the access information from install job {{ _aap_job.id }}
-      ansible.builtin.uri:
-        url: "{{ _aap_api }}/jobs/{{ _aap_job.id }}/job_events/?event=runner_on_ok&task={{ ao_access_task | urlencode }}&order_by=-counter&page_size=1"
-        user: "{{ demo_aap_username }}"
-        password: "{{ demo_aap_password }}"
-        force_basic_auth: true
-        validate_certs: "{{ demo_aap_validate_certs }}"
-      register: _access_events
-      no_log: true
-
-    - name: Parse the automation orchestrator connection details
-      vars:
-        _lines: "{{ _access_events.json.results | map(attribute='event_data') | map(attribute='res') | map(attribute='msg') | first | default([]) }}"
-      ansible.builtin.set_fact:
-        ao_url: "{{ _lines | select('match', 'URL:') | first | default('') | regex_replace('^URL: *', '') | trim | regex_replace('/+$', '') }}"
-        ao_username: "{{ _lines | select('match', 'Username:') | first | default('') | regex_replace('^Username: *', '') | trim }}"
-        ao_password: "{{ _lines | select('match', 'Password:') | first | default('') | regex_replace('^Password: *', '') | trim }}"
-      no_log: true
-
-    - name: Verify the connection details were found
-      ansible.builtin.assert:
-        that:
-          - ao_url | length > 0
-          - ao_username | length > 0
-          - ao_password | length > 0
-        fail_msg: >-
-          Could not parse URL, username, and password from the '{{ ao_access_task }}'
-          task in job {{ _aap_job.id }} ({{ _aap_base }}/execution/jobs/playbook/{{ _aap_job.id }}/output).
-        quiet: true
-
-    - name: Show the automation orchestrator URL
-      ansible.builtin.debug:
-        msg: "Automation orchestrator: {{ ao_url }} (user {{ ao_username }})"
+            _ao_install_job: "{{ _aap_job }}"
+          when: run_ao_install | bool
 
     # ======================================================================
     # Automation orchestrator: base configuration
     # ======================================================================
-    - name: Set the automation orchestrator API base
-      ansible.builtin.set_fact:
-        _ao_api: "{{ ao_url }}/api/v1"
+    - name: Configure automation orchestrator
+      tags: [full, aoconfig]
+      block:
+        # Runs under aoconfig, or under full with run_ao_install=false.
+        - name: Use the last successful install job
+          when: _ao_install_job is not defined
+          block:
+            - name: Look up job template {{ ao_install_template }}
+              ansible.builtin.uri:
+                url: "{{ _aap_api }}/job_templates/?name={{ ao_install_template | urlencode }}"
+                user: "{{ demo_aap_username }}"
+                password: "{{ demo_aap_password }}"
+                force_basic_auth: true
+                validate_certs: "{{ demo_aap_validate_certs }}"
+              register: _install_jt
 
-    # AO can reject logins for a minute or two after a fresh deploy.
-    - name: Log in to automation orchestrator
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/auth/login"
-        method: POST
-        body_format: json
-        body:
-          username: "{{ ao_username }}"
-          password: "{{ ao_password }}"
-        validate_certs: "{{ ao_validate_certs }}"
-        status_code: 200
-      register: _ao_login
-      until: _ao_login.status == 200
-      retries: "{{ ao_login_retries }}"
-      delay: "{{ ao_login_delay }}"
-      no_log: true
+            - name: Look up the last successful install job
+              ansible.builtin.uri:
+                url: "{{ _aap_api }}/job_templates/{{ _install_jt.json.results[0].id }}/jobs/?status=successful&order_by=-finished&page_size=1"
+                user: "{{ demo_aap_username }}"
+                password: "{{ demo_aap_password }}"
+                force_basic_auth: true
+                validate_certs: "{{ demo_aap_validate_certs }}"
+              register: _install_jobs
+              when: _install_jt.json.count | default(0) == 1
 
-    - name: Set the automation orchestrator auth header
-      ansible.builtin.set_fact:
-        _ao_headers:
-          Authorization: "Bearer {{ _ao_login.json.access_token }}"
-      no_log: true
+            - name: Verify a successful install job exists
+              ansible.builtin.assert:
+                that:
+                  - _install_jobs.json.results | default([]) | length > 0
+                fail_msg: >-
+                  No successful '{{ ao_install_template }}' job found on {{ _aap_base }}.
+                  Run with --tags full to install automation orchestrator first.
+                quiet: true
 
-    - name: List automation orchestrator projects
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/projects?limit=100"
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_projects
+            - name: Remember the last successful install job
+              ansible.builtin.set_fact:
+                _ao_install_job: "{{ _install_jobs.json.results[0] }}"
 
-    - name: Select project {{ ao_project_name }}
-      ansible.builtin.set_fact:
-        _ao_project: >-
-          {{ _ao_projects.json.resources
-             | selectattr('name', 'match', '(?i)^' ~ (ao_project_name | regex_escape) ~ '$')
-             | first | default({}) }}
+        - name: Read the access information from install job {{ _ao_install_job.id }}
+          ansible.builtin.uri:
+            url: "{{ _aap_api }}/jobs/{{ _ao_install_job.id }}/job_events/?event=runner_on_ok&task={{ ao_access_task | urlencode }}&order_by=-counter&page_size=1"
+            user: "{{ demo_aap_username }}"
+            password: "{{ demo_aap_password }}"
+            force_basic_auth: true
+            validate_certs: "{{ demo_aap_validate_certs }}"
+          register: _access_events
+          no_log: true
 
-    - name: Verify the project exists
-      ansible.builtin.assert:
-        that:
-          - _ao_project | length > 0
-        fail_msg: >-
-          Project '{{ ao_project_name }}' not found. Available projects:
-          {{ _ao_projects.json.resources | map(attribute='name') | join(', ') }}
-        quiet: true
+        - name: Parse the automation orchestrator connection details
+          vars:
+            _lines: "{{ _access_events.json.results | map(attribute='event_data') | map(attribute='res') | map(attribute='msg') | first | default([]) }}"
+          ansible.builtin.set_fact:
+            ao_url: "{{ _lines | select('match', 'URL:') | first | default('') | regex_replace('^URL: *', '') | trim | regex_replace('/+$', '') }}"
+            ao_username: "{{ _lines | select('match', 'Username:') | first | default('') | regex_replace('^Username: *', '') | trim }}"
+            ao_password: "{{ _lines | select('match', 'Password:') | first | default('') | regex_replace('^Password: *', '') | trim }}"
+          no_log: true
 
-    - name: List credential types
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/credential_types?limit=100"
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_cred_types
+        - name: Verify the connection details were found
+          ansible.builtin.assert:
+            that:
+              - ao_url | length > 0
+              - ao_username | length > 0
+              - ao_password | length > 0
+            fail_msg: >-
+              Could not parse URL, username, and password from the '{{ ao_access_task }}'
+              task in job {{ _ao_install_job.id }} ({{ _aap_base }}/execution/jobs/playbook/{{ _ao_install_job.id }}/output).
+            quiet: true
 
-    - name: Select the Ansible Automation Platform credential type
-      ansible.builtin.set_fact:
-        _ao_cred_type_id: >-
-          {{ _ao_cred_types.json.resources
-             | selectattr('name', 'search', '(?i)ansible automation platform')
-             | map(attribute='id') | first | default('') }}
+        - name: Show the automation orchestrator URL
+          ansible.builtin.debug:
+            msg: "Automation orchestrator: {{ ao_url }} (user {{ ao_username }})"
 
-    - name: Verify the credential type exists
-      ansible.builtin.assert:
-        that:
-          - _ao_cred_type_id | length > 0
-        fail_msg: >-
-          No Ansible Automation Platform credential type found. Available types:
-          {{ _ao_cred_types.json.resources | map(attribute='name') | join(', ') }}
-        quiet: true
+        - name: Set the automation orchestrator API base
+          ansible.builtin.set_fact:
+            _ao_api: "{{ ao_url }}/api/v1"
 
-    - name: Read the credential type field schema
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/credential_types/{{ _ao_cred_type_id }}"
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_cred_type
+        # AO can reject logins for a minute or two after a fresh deploy.
+        - name: Log in to automation orchestrator
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/auth/login"
+            method: POST
+            body_format: json
+            body:
+              username: "{{ ao_username }}"
+              password: "{{ ao_password }}"
+            validate_certs: "{{ ao_validate_certs }}"
+            status_code: 200
+          register: _ao_login
+          until: _ao_login.status == 200
+          retries: "{{ ao_login_retries }}"
+          delay: "{{ ao_login_delay }}"
+          no_log: true
 
-    # AO documents inputs as a free-form object, so normalize the shapes it
-    # can take: {fields: [...]}, {properties: {...}}, a bare field mapping,
-    # or a bare list of fields.
-    - name: Normalize the credential type input schema
-      vars:
-        _inputs: "{{ _ao_cred_type.json.inputs | default({}) }}"
-      ansible.builtin.set_fact:
-        _ao_cred_input_schema: "{{ _inputs }}"
-        _ao_cred_fields: []
-        _ao_cred_field_src: >-
-          {{ _inputs.fields if _inputs.fields is defined
-             else (_inputs.properties | list) if _inputs.properties is defined
-             else (_inputs | list) if _inputs is mapping
-             else _inputs }}
+        - name: Set the automation orchestrator auth header
+          ansible.builtin.set_fact:
+            _ao_headers:
+              Authorization: "Bearer {{ _ao_login.json.access_token }}"
+          no_log: true
 
-    - name: Collect the credential type input field names
-      ansible.builtin.set_fact:
-        _ao_cred_fields: >-
-          {{ _ao_cred_fields + [field.id | default(field.name | default('')) if field is mapping else field] }}
-      loop: "{{ _ao_cred_field_src }}"
-      loop_control:
-        loop_var: field
+        - name: List automation orchestrator projects
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/projects?limit=100"
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_projects
 
-    - name: Show the credential type input fields
-      ansible.builtin.debug:
-        msg: "AAP credential type input fields: {{ _ao_cred_fields | join(', ') | default('(none)', true) }}"
+        - name: Select project {{ ao_project_name }}
+          ansible.builtin.set_fact:
+            _ao_project: >-
+              {{ _ao_projects.json.resources
+                 | selectattr('name', 'match', '(?i)^' ~ (ao_project_name | regex_escape) ~ '$')
+                 | first | default({}) }}
 
-    # Only field names the type actually declares are sent, so a mismatch
-    # fails here with the schema in hand instead of as a 422 from the API.
-    - name: Map values onto the credential type fields
-      vars:
-        _host_key: "{{ _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | first | default('') }}"
-        _user_key: "{{ _ao_cred_fields | select('search', '(?i)user') | first | default('') }}"
-        _pass_key: "{{ _ao_cred_fields | select('search', '(?i)passw') | first | default('') }}"
-        _verify_key: "{{ _ao_cred_fields | select('search', '(?i)verify|ssl|tls') | first | default('') }}"
-      ansible.builtin.set_fact:
-        _ao_cred_inputs: >-
-          {{ ao_aap_credential_inputs | default(
-               ({_host_key: _aap_base} if _host_key else {})
-               | combine({_user_key: demo_aap_username} if _user_key else {})
-               | combine({_pass_key: demo_aap_password} if _pass_key else {})
-               | combine({_verify_key: ao_aap_credential_verify_ssl | bool} if _verify_key else {}),
-               true) }}
-      no_log: true
+        - name: Verify the project exists
+          ansible.builtin.assert:
+            that:
+              - _ao_project | length > 0
+            fail_msg: >-
+              Project '{{ ao_project_name }}' not found. Available projects:
+              {{ _ao_projects.json.resources | map(attribute='name') | join(', ') }}
+            quiet: true
 
-    # AO 2026.8 AAP credentials hold auth only (username/password or an OAuth
-    # token); the AAP URL lives on the integration. Older builds also had a
-    # host field, which is filled in above when present.
-    - name: Verify the credential inputs could be mapped
-      ansible.builtin.assert:
-        that:
-          - _ao_cred_inputs | length > 0
-          - >-
-            ao_aap_credential_inputs is defined
-            or (_ao_cred_fields | select('search', '(?i)user') | list | length > 0
-                and _ao_cred_fields | select('search', '(?i)passw') | list | length > 0)
-        fail_msg: >-
-          Could not map the demo AAP username and password onto the credential type's input fields
-          ({{ _ao_cred_fields | join(', ') | default('(none)', true) }}).
-          Input schema: {{ _ao_cred_input_schema }}.
-          Set ao_aap_credential_inputs to the correct field names and rerun.
-        quiet: true
+        - name: List credential types
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/credential_types?limit=100"
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_cred_types
 
-    - name: List credentials
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/credentials?limit=100"
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_creds
+        - name: Select the Ansible Automation Platform credential type
+          ansible.builtin.set_fact:
+            _ao_cred_type_id: >-
+              {{ _ao_cred_types.json.resources
+                 | selectattr('name', 'search', '(?i)ansible automation platform')
+                 | map(attribute='id') | first | default('') }}
 
-    - name: Check for an existing {{ ao_aap_credential_name }} credential
-      ansible.builtin.set_fact:
-        _ao_cred_existing: >-
-          {{ _ao_creds.json.resources
-             | selectattr('name', 'equalto', ao_aap_credential_name)
-             | first | default({}) }}
+        - name: Verify the credential type exists
+          ansible.builtin.assert:
+            that:
+              - _ao_cred_type_id | length > 0
+            fail_msg: >-
+              No Ansible Automation Platform credential type found. Available types:
+              {{ _ao_cred_types.json.resources | map(attribute='name') | join(', ') }}
+            quiet: true
 
-    # The request body carries the AAP password, so the task runs with
-    # no_log and the next task reports the (secret-masked) response.
-    - name: Create or update the {{ ao_aap_credential_name }} credential
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/credentials{{ ('/' ~ _ao_cred_existing.id) if _ao_cred_existing else '' }}"
-        method: "{{ 'PATCH' if _ao_cred_existing else 'POST' }}"
-        headers: "{{ _ao_headers }}"
-        body_format: json
-        body: >-
-          {{ {'inputs': _ao_cred_inputs} if _ao_cred_existing else {
-               'name': ao_aap_credential_name,
-               'description': 'Demo AAP instance ' ~ _aap_base,
-               'project_id': _ao_project.id,
-               'credential_type_id': _ao_cred_type_id,
-               'inputs': _ao_cred_inputs
-             } }}
-        validate_certs: "{{ ao_validate_certs }}"
-        status_code: [200, 201]
-      register: _ao_cred_result
-      failed_when: false
-      no_log: true
+        - name: Read the credential type field schema
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/credential_types/{{ _ao_cred_type_id }}"
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_cred_type
 
-    - name: Verify the credential was saved
-      ansible.builtin.assert:
-        that:
-          - _ao_cred_result.status in [200, 201]
-        fail_msg: >-
-          Credential save failed (HTTP {{ _ao_cred_result.status }}):
-          {{ _ao_cred_result.json | default(_ao_cred_result.msg) }}
-        quiet: true
+        # AO documents inputs as a free-form object, so normalize the shapes it
+        # can take: {fields: [...]}, {properties: {...}}, a bare field mapping,
+        # or a bare list of fields.
+        - name: Normalize the credential type input schema
+          vars:
+            _inputs: "{{ _ao_cred_type.json.inputs | default({}) }}"
+          ansible.builtin.set_fact:
+            _ao_cred_input_schema: "{{ _inputs }}"
+            _ao_cred_fields: []
+            _ao_cred_field_src: >-
+              {{ _inputs.fields if _inputs.fields is defined
+                 else (_inputs.properties | list) if _inputs.properties is defined
+                 else (_inputs | list) if _inputs is mapping
+                 else _inputs }}
 
-    - name: Remember the credential ID
-      ansible.builtin.set_fact:
-        _ao_cred_id: "{{ _ao_cred_result.json.id | default(_ao_cred_existing.id) }}"
+        - name: Collect the credential type input field names
+          ansible.builtin.set_fact:
+            _ao_cred_fields: >-
+              {{ _ao_cred_fields + [field.id | default(field.name | default('')) if field is mapping else field] }}
+          loop: "{{ _ao_cred_field_src }}"
+          loop_control:
+            loop_var: field
 
-    # The credential holds only auth; the integration holds the AAP URL and
-    # TLS settings. AAP workflow steps reference both.
-    - name: List integrations
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/integrations?limit=100"
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_integrations
+        - name: Show the credential type input fields
+          ansible.builtin.debug:
+            msg: "AAP credential type input fields: {{ _ao_cred_fields | join(', ') | default('(none)', true) }}"
 
-    - name: Check for an existing {{ ao_aap_integration_name }} integration
-      ansible.builtin.set_fact:
-        _ao_integration_existing: >-
-          {{ _ao_integrations.json.resources
-             | selectattr('name', 'equalto', ao_aap_integration_name)
-             | first | default({}) }}
+        # Only field names the type actually declares are sent, so a mismatch
+        # fails here with the schema in hand instead of as a 422 from the API.
+        - name: Map values onto the credential type fields
+          vars:
+            _host_key: "{{ _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | first | default('') }}"
+            _user_key: "{{ _ao_cred_fields | select('search', '(?i)user') | first | default('') }}"
+            _pass_key: "{{ _ao_cred_fields | select('search', '(?i)passw') | first | default('') }}"
+            _verify_key: "{{ _ao_cred_fields | select('search', '(?i)verify|ssl|tls') | first | default('') }}"
+          ansible.builtin.set_fact:
+            _ao_cred_inputs: >-
+              {{ ao_aap_credential_inputs | default(
+                   ({_host_key: _aap_base} if _host_key else {})
+                   | combine({_user_key: demo_aap_username} if _user_key else {})
+                   | combine({_pass_key: demo_aap_password} if _pass_key else {})
+                   | combine({_verify_key: ao_aap_credential_verify_ssl | bool} if _verify_key else {}),
+                   true) }}
+          no_log: true
 
-    - name: Create or update the {{ ao_aap_integration_name }} integration
-      vars:
-        _update:
-          configuration:
-            integration_type: ansible_automation_platform
-            base_url: "{{ _aap_base }}"
-            insecure_skip_tls_verify: "{{ not (demo_aap_validate_certs | bool) }}"
-          management_credential_id: "{{ _ao_cred_id }}"
-          enabled: true
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/integrations{{ ('/' ~ _ao_integration_existing.id) if _ao_integration_existing else '' }}"
-        method: "{{ 'PATCH' if _ao_integration_existing else 'POST' }}"
-        headers: "{{ _ao_headers }}"
-        body_format: json
-        body: >-
-          {{ _update if _ao_integration_existing else _update | combine({
-               'name': ao_aap_integration_name,
-               'description': 'Demo AAP instance ' ~ _aap_base,
-               'integration_type': 'ansible_automation_platform',
-               'scope': 'global'
-             }) }}
-        validate_certs: "{{ ao_validate_certs }}"
-        status_code: [200, 201]
-      register: _ao_integration_result
+        # AO 2026.8 AAP credentials hold auth only (username/password or an OAuth
+        # token); the AAP URL lives on the integration. Older builds also had a
+        # host field, which is filled in above when present.
+        - name: Verify the credential inputs could be mapped
+          ansible.builtin.assert:
+            that:
+              - _ao_cred_inputs | length > 0
+              - >-
+                ao_aap_credential_inputs is defined
+                or (_ao_cred_fields | select('search', '(?i)user') | list | length > 0
+                    and _ao_cred_fields | select('search', '(?i)passw') | list | length > 0)
+            fail_msg: >-
+              Could not map the demo AAP username and password onto the credential type's input fields
+              ({{ _ao_cred_fields | join(', ') | default('(none)', true) }}).
+              Input schema: {{ _ao_cred_input_schema }}.
+              Set ao_aap_credential_inputs to the correct field names and rerun.
+            quiet: true
 
-    - name: Remember the integration ID
-      ansible.builtin.set_fact:
-        _ao_integration_id: "{{ _ao_integration_result.json.id | default(_ao_integration_existing.id) }}"
+        - name: List credentials
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/credentials?limit=100"
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_creds
 
-    # A failed health check doesn't block the import; the integration can be
-    # fixed later without re-importing the workflows.
-    - name: Validate the {{ ao_aap_integration_name }} integration
-      ansible.builtin.uri:
-        url: "{{ _ao_api }}/integrations/{{ _ao_integration_id }}/validate"
-        method: POST
-        headers: "{{ _ao_headers }}"
-        validate_certs: "{{ ao_validate_certs }}"
-      register: _ao_integration_validate
-      failed_when: false
+        - name: Check for an existing {{ ao_aap_credential_name }} credential
+          ansible.builtin.set_fact:
+            _ao_cred_existing: >-
+              {{ _ao_creds.json.resources
+                 | selectattr('name', 'equalto', ao_aap_credential_name)
+                 | first | default({}) }}
 
-    - name: Show the integration health check
-      ansible.builtin.debug:
-        msg: >-
-          {{ ao_aap_integration_name }} health check (HTTP {{ _ao_integration_validate.status }}):
-          {{ _ao_integration_validate.json | default(_ao_integration_validate.msg) }}
+        # The request body carries the AAP password, so the task runs with
+        # no_log and the next task reports the (secret-masked) response.
+        - name: Create or update the {{ ao_aap_credential_name }} credential
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/credentials{{ ('/' ~ _ao_cred_existing.id) if _ao_cred_existing else '' }}"
+            method: "{{ 'PATCH' if _ao_cred_existing else 'POST' }}"
+            headers: "{{ _ao_headers }}"
+            body_format: json
+            body: >-
+              {{ {'inputs': _ao_cred_inputs} if _ao_cred_existing else {
+                   'name': ao_aap_credential_name,
+                   'description': 'Demo AAP instance ' ~ _aap_base,
+                   'project_id': _ao_project.id,
+                   'credential_type_id': _ao_cred_type_id,
+                   'inputs': _ao_cred_inputs
+                 } }}
+            validate_certs: "{{ ao_validate_certs }}"
+            status_code: [200, 201]
+          register: _ao_cred_result
+          failed_when: false
+          no_log: true
 
-    - name: Load workflows
-      ansible.builtin.include_tasks: tasks/import_ao_workflow.yml
-      loop: "{{ ao_workflows }}"
-      loop_control:
-        loop_var: workflow
-        label: "{{ workflow.name | default(workflow.url) }}"
+        - name: Verify the credential was saved
+          ansible.builtin.assert:
+            that:
+              - _ao_cred_result.status in [200, 201]
+            fail_msg: >-
+              Credential save failed (HTTP {{ _ao_cred_result.status }}):
+              {{ _ao_cred_result.json | default(_ao_cred_result.msg) }}
+            quiet: true
 
-    - name: Summary
-      ansible.builtin.debug:
-        msg: "{{ _summary + (_ao_loaded_workflows | default([])) }}"
-      vars:
-        _summary:
-          - "Automation orchestrator: {{ ao_url }}"
-          - "Username: {{ ao_username }}"
-          - "Password: {{ ao_password if show_ao_password | bool else 'see the ' ~ ao_access_task ~ ' task in ' ~ _aap_base ~ '/execution/jobs/playbook/' ~ _aap_job.id ~ '/output' }}"
-          - "Credential: {{ ao_aap_credential_name }} ({{ _ao_cred_id }}) in project {{ _ao_project.name }}"
-          - "Integration: {{ ao_aap_integration_name }} ({{ _ao_integration_id }}) for {{ _aap_base }}"
+        - name: Remember the credential ID
+          ansible.builtin.set_fact:
+            _ao_cred_id: "{{ _ao_cred_result.json.id | default(_ao_cred_existing.id) }}"
+
+        # The credential holds only auth; the integration holds the AAP URL and
+        # TLS settings. AAP workflow steps reference both.
+        - name: List integrations
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/integrations?limit=100"
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_integrations
+
+        - name: Check for an existing {{ ao_aap_integration_name }} integration
+          ansible.builtin.set_fact:
+            _ao_integration_existing: >-
+              {{ _ao_integrations.json.resources
+                 | selectattr('name', 'equalto', ao_aap_integration_name)
+                 | first | default({}) }}
+
+        - name: Create or update the {{ ao_aap_integration_name }} integration
+          vars:
+            _update:
+              configuration:
+                integration_type: ansible_automation_platform
+                base_url: "{{ _aap_base }}"
+                insecure_skip_tls_verify: "{{ not (demo_aap_validate_certs | bool) }}"
+              management_credential_id: "{{ _ao_cred_id }}"
+              enabled: true
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/integrations{{ ('/' ~ _ao_integration_existing.id) if _ao_integration_existing else '' }}"
+            method: "{{ 'PATCH' if _ao_integration_existing else 'POST' }}"
+            headers: "{{ _ao_headers }}"
+            body_format: json
+            body: >-
+              {{ _update if _ao_integration_existing else _update | combine({
+                   'name': ao_aap_integration_name,
+                   'description': 'Demo AAP instance ' ~ _aap_base,
+                   'integration_type': 'ansible_automation_platform',
+                   'scope': 'global'
+                 }) }}
+            validate_certs: "{{ ao_validate_certs }}"
+            status_code: [200, 201]
+          register: _ao_integration_result
+
+        - name: Remember the integration ID
+          ansible.builtin.set_fact:
+            _ao_integration_id: "{{ _ao_integration_result.json.id | default(_ao_integration_existing.id) }}"
+
+        # A failed health check doesn't block the import; the integration can be
+        # fixed later without re-importing the workflows.
+        - name: Validate the {{ ao_aap_integration_name }} integration
+          ansible.builtin.uri:
+            url: "{{ _ao_api }}/integrations/{{ _ao_integration_id }}/validate"
+            method: POST
+            headers: "{{ _ao_headers }}"
+            validate_certs: "{{ ao_validate_certs }}"
+          register: _ao_integration_validate
+          failed_when: false
+
+        - name: Show the integration health check
+          ansible.builtin.debug:
+            msg: >-
+              {{ ao_aap_integration_name }} health check (HTTP {{ _ao_integration_validate.status }}):
+              {{ _ao_integration_validate.json | default(_ao_integration_validate.msg) }}
+
+        - name: Load workflows
+          ansible.builtin.include_tasks:
+            file: tasks/import_ao_workflow.yml
+            apply:
+              tags: [full, aoconfig]
+          loop: "{{ ao_workflows }}"
+          loop_control:
+            loop_var: workflow
+            label: "{{ workflow.name | default(workflow.url) }}"
+
+        - name: Summary
+          ansible.builtin.debug:
+            msg: "{{ _summary + (_ao_loaded_workflows | default([])) }}"
+          vars:
+            _summary:
+              - "Automation orchestrator: {{ ao_url }}"
+              - "Username: {{ ao_username }}"
+              - "Password: {{ ao_password if show_ao_password | bool else 'see the ' ~ ao_access_task ~ ' task in ' ~ _aap_base ~ '/execution/jobs/playbook/' ~ _ao_install_job.id ~ '/output' }}"
+              - "Credential: {{ ao_aap_credential_name }} ({{ _ao_cred_id }}) in project {{ _ao_project.name }}"
+              - "Integration: {{ ao_aap_integration_name }} ({{ _ao_integration_id }}) for {{ _aap_base }}"

@@ -53,6 +53,9 @@
         url: https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/disk-utilization/ao/disk-demo-101.json
       - name: RHEL CVE Remediation - Intelligent Patching
         url: https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/cve-remediation/ao/rhel-cve-remediation.json
+      # Local files are relative to the playbook directory; the name comes
+      # from the JSON when not set here.
+      - file: workflows/build-ee.json
 
   tasks:
     # ======================================================================
@@ -459,7 +462,7 @@
           loop: "{{ ao_workflows }}"
           loop_control:
             loop_var: workflow
-            label: "{{ workflow.name | default(workflow.url) }}"
+            label: "{{ workflow.name | default(workflow.file | default(workflow.url)) }}"
 
         - name: Summary
           ansible.builtin.debug:

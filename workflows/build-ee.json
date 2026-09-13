@@ -1,0 +1,133 @@
+{
+  "schema_version": "2.0.0",
+  "name": "Build-EE",
+  "description": "New workflow",
+  "triggers": [
+    {
+      "id": "activity_13820a42_f14b_444b_a476_ddb89611320d",
+      "type": "manual_trigger",
+      "name": "GIT webhook call",
+      "parameters": {
+        "input_schema": {
+          "$schema": "http://json-schema.org/draft-07/schema#",
+          "type": "object",
+          "properties": {
+            "first_run": {
+              "type": "boolean"
+            }
+          },
+          "additionalProperties": true
+        }
+      },
+      "position": {
+        "x": -546,
+        "y": -108
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "activity_2433eeac_9d23_4e30_88cf_331563228d98",
+      "type": "agentic",
+      "name": "AI Repair EE Build Failure",
+      "parameters": {
+        "prompt": "examine the contents of ${activity_dae50503_a40d_4234_b92f_c2b347df308e.artifacts} and determine what changes need to be made to the execution-environments.yml file to successfully build the ansible EE.",
+        "tool_selection_strategy": "NONE"
+      },
+      "settings": {},
+      "position": {
+        "x": 850.2108289176299,
+        "y": -141.25875756947184
+      }
+    },
+    {
+      "id": "activity_bb01453b_c9ce_4aa0_88b3_2839ddf3c7bd",
+      "type": "aap_job_template",
+      "name": "Register New EE",
+      "parameters": {
+        "diff_mode": false,
+        "integration_id": "78f94be1-2767-453b-a7e9-647ddfcff643",
+        "job_template_id": 6,
+        "job_template_name": "Demo Job Template",
+        "organization_name": "Default"
+      },
+      "position": {
+        "x": 818.9354613694017,
+        "y": -462.9055324562047
+      }
+    },
+    {
+      "id": "activity_dae50503_a40d_4234_b92f_c2b347df308e",
+      "type": "aap_job_template",
+      "name": "Build-EE-JobTemplate",
+      "parameters": {
+        "diff_mode": false,
+        "integration_id": "78f94be1-2767-453b-a7e9-647ddfcff643",
+        "job_template_id": 6,
+        "job_template_name": "Demo Job Template",
+        "organization_name": "Default"
+      },
+      "position": {
+        "x": 145.00467253621622,
+        "y": -307.08716389854465
+      }
+    },
+    {
+      "id": "logic_1789339570259_rjcvr51orj185",
+      "type": "condition",
+      "name": "Previous Completed Succesfully",
+      "parameters": {
+        "condition": "${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_status} == true"
+      },
+      "position": {
+        "x": 469.93546136940165,
+        "y": -269.9055324562047
+      }
+    },
+    {
+      "id": "logic_1789340034805_1o3g9vu1ttx2ug",
+      "type": "loop",
+      "name": "Loop Until Working",
+      "parameters": {
+        "type": "do_while",
+        "condition": "(${logic_1789339570259_rjcvr51orj185.evaluated_result} == false or ${logic_1789340034805_1o3g9vu1ttx2ug.iteration_count} == 0)",
+        "max_iterations": 10
+      },
+      "settings": {},
+      "position": {
+        "x": -255,
+        "y": -155.109375
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "activity_dae50503_a40d_4234_b92f_c2b347df308e",
+      "to": "logic_1789339570259_rjcvr51orj185"
+    },
+    {
+      "from": "logic_1789339570259_rjcvr51orj185",
+      "to": "activity_bb01453b_c9ce_4aa0_88b3_2839ddf3c7bd",
+      "from_port": "true"
+    },
+    {
+      "from": "activity_13820a42_f14b_444b_a476_ddb89611320d",
+      "to": "logic_1789340034805_1o3g9vu1ttx2ug"
+    },
+    {
+      "from": "logic_1789340034805_1o3g9vu1ttx2ug",
+      "to": "activity_dae50503_a40d_4234_b92f_c2b347df308e",
+      "from_port": "iterate"
+    },
+    {
+      "from": "logic_1789339570259_rjcvr51orj185",
+      "to": "activity_2433eeac_9d23_4e30_88cf_331563228d98",
+      "from_port": "false"
+    },
+    {
+      "from": "activity_2433eeac_9d23_4e30_88cf_331563228d98",
+      "to": "logic_1789340034805_1o3g9vu1ttx2ug",
+      "to_port": "iterate"
+    }
+  ]
+}

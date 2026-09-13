@@ -1,29 +1,40 @@
 ---
 # Import (or update) one workflow JSON file into automation orchestrator.
-# Input:   workflow ({name, url, description?})
+# Input:   workflow ({url | file, name?, description?})
+#          file is relative to the playbook directory and wins over url.
 # Output:  appends to _ao_loaded_workflows
-- name: Download {{ workflow.url | basename }}
+- name: Download {{ workflow.url | default('') | basename }}
   ansible.builtin.uri:
     url: "{{ workflow.url }}"
     return_content: true
   register: _wf_download
+  when: workflow.file is not defined
 
-- name: Parse {{ workflow.url | basename }}
+- name: Parse {{ workflow.file | default(workflow.url) | basename }}
   ansible.builtin.set_fact:
-    _wf_source: "{{ _wf_download.content | from_json }}"
+    _wf_source: >-
+      {{ (lookup('ansible.builtin.file', playbook_dir ~ '/' ~ workflow.file)
+          if workflow.file is defined else _wf_download.content) | from_json }}
     _wf_nodes: []
 
 # Exported files carry credential and integration IDs from the source
 # instance (or a placeholder). AAP execution nodes need both: the
 # integration resolves the AAP URL and the credential authenticates.
+# Template IDs are also specific to the source AAP, so when a step names
+# its template, the ID is dropped and the step resolves by name.
 - name: Attach the demo AAP integration and credential to AAP nodes
+  vars:
+    _params: "{{ node.parameters | default({}) }}"
+    _drop: >-
+      {{ (['job_template_id'] if _params.job_template_name is defined else [])
+         + (['workflow_job_template_id'] if _params.workflow_job_template_name is defined else []) }}
+    _aap_params: >-
+      {{ _params | dict2items | rejectattr('key', 'in', _drop) | items2dict
+         | combine({'credential_id': _ao_cred_id, 'integration_id': _ao_integration_id}) }}
   ansible.builtin.set_fact:
     _wf_nodes: >-
       {{ _wf_nodes + [
-           node | combine({'parameters': {
-             'credential_id': _ao_cred_id,
-             'integration_id': _ao_integration_id
-           }}, recursive=true)
+           node | combine({'parameters': _aap_params})
            if node.type in ao_aap_node_types else node
          ] }}
   loop: "{{ _wf_source.nodes | default([]) }}"

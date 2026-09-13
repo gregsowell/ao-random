@@ -16,10 +16,14 @@ AAP instance and loads base configuration into it. It runs against `localhost` a
    - a `Demo AAP` credential holding the demo AAP username and password
    - a global `Demo AAP` integration holding the demo AAP URL, using that credential for
      health checks. The run then triggers the integration's health check and prints the result.
-5. **AO**: imports two workflows into the `Default` project and points every AAP job template
+5. **AO**: imports three workflows into the `Default` project and points every AAP job template
    step at the `Demo AAP` integration and credential:
    - [disk-demo-101.json](https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/disk-utilization/ao/disk-demo-101.json) as *Disk Utilization Demo 101*
    - [rhel-cve-remediation.json](https://raw.githubusercontent.com/ansible-tmm/aap-orchestrator-demos/main/cve-remediation/ao/rhel-cve-remediation.json) as *RHEL CVE Remediation - Intelligent Patching*
+   - [workflows/build-ee.json](workflows/build-ee.json) as *Build-EE*, from this repo
+
+   Job template IDs are specific to the AAP a workflow was exported from, so when a step names
+   its template, the ID is dropped and the step resolves the template by name.
 
 ## Run it from aap.gregsowell.com
 
@@ -61,7 +65,7 @@ ansible-playbook ao_setup.yml -e demo_aap_url=https://aap.apps.cluster-xxxx.exam
 | `ao_aap_credential_name` | `Demo AAP` | Name of the AAP credential created in AO. |
 | `ao_aap_integration_name` | `Demo AAP` | Name of the AAP integration created in AO. TLS verification follows `demo_aap_validate_certs`. |
 | `ao_aap_credential_inputs` | *(discovered)* | Override the credential inputs dict if the field mapping is wrong. |
-| `ao_workflows` | the two workflows above | List of `{name, url, description?}` to import. |
+| `ao_workflows` | the three workflows above | List of workflows to import. Each entry has a `url` or a `file` (relative to the playbook directory), plus optional `name` (defaults to the name in the JSON) and `description`. |
 | `ao_publish_workflows` | `false` | Try to publish after import. A publish failure only warns. |
 
 ## Tags
@@ -98,6 +102,8 @@ under `full`.
   - The CVE demo calls *CVE - Fetch and Commit*, *CVE - Sync and Deploy Remediation*, and
     *CVE - Notify Mattermost Investigation*. Its Task agent steps also need an LLM provider
     and the Lightspeed and AAP MCP integrations.
+  - Build-EE's two AAP steps both call *Demo Job Template*, and its AI repair step needs an
+    LLM provider.
 
 ## Built against
 

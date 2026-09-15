@@ -1,0 +1,116 @@
+---
+# Score each host's metrics and decide the overall fleet status.
+#
+# Inputs (extra vars):
+#   metrics        host metrics from Collect Fleet Metrics (required). A
+#                  list, or the same list serialized as JSON or YAML.
+#   collection_id  run identifier (optional)
+#   cpu_warning, memory_warning, disk_warning, critical_threshold
+#                  percentages (optional)
+#
+# Artifacts (set_stats): collection_id, fleet_status (ok | degraded |
+# critical), host_count, healthy_count, warning_count, critical_count,
+# avg_cpu_pct, avg_memory_pct, avg_disk_pct, worst_host,
+# hosts_needing_attention
+- name: Analyze fleet metrics
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    metrics: []
+    collection_id: manual-run
+    cpu_warning: 80
+    memory_warning: 85
+    disk_warning: 85
+    critical_threshold: 95
+
+  tasks:
+    # Extra vars win over set_fact, so inputs are copied to new names.
+    - name: Normalize the metrics input
+      ansible.builtin.set_fact:
+        fleet_metrics: "{{ (metrics | from_yaml) if metrics is string else metrics }}"
+        analyzed_hosts: []
+
+    - name: Verify metrics were provided
+      ansible.builtin.assert:
+        that:
+          - fleet_metrics | length > 0
+        fail_msg: >-
+          No metrics provided. Run "AO Demo | Collect Fleet Metrics" first or
+          pass metrics as an extra var.
+        quiet: true
+
+    - name: Score each host
+      vars:
+        _cpu: "{{ item.cpu_pct | float }}"
+        _memory: "{{ item.memory_pct | float }}"
+        _disk: "{{ item.disk_pct | float }}"
+        _peak: "{{ [_cpu | float, _memory | float, _disk | float] | max }}"
+        _findings: >-
+          {{ (['cpu ' ~ item.cpu_pct ~ '%'] if (_cpu | float) >= (cpu_warning | float) else [])
+             + (['memory ' ~ item.memory_pct ~ '%'] if (_memory | float) >= (memory_warning | float) else [])
+             + (['disk ' ~ item.disk_pct ~ '%'] if (_disk | float) >= (disk_warning | float) else []) }}
+      ansible.builtin.set_fact:
+        analyzed_hosts: >-
+          {{ analyzed_hosts + [item | combine({
+               'peak_pct': _peak | float,
+               'primary_metric': 'disk' if (_disk | float) >= (_cpu | float) and (_disk | float) >= (_memory | float)
+                                 else 'cpu' if (_cpu | float) >= (_memory | float)
+                                 else 'memory',
+               'findings': _findings,
+               'health_score': (100 - ((_cpu | float) + (_memory | float) + (_disk | float)) / 3) | round(1),
+               'status': 'critical' if (_peak | float) >= (critical_threshold | float)
+                         else 'warning' if (_findings | length) > 0
+                         else 'healthy'
+             })] }}
+      loop: "{{ fleet_metrics }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Summarize the fleet
+      vars:
+        _count: "{{ analyzed_hosts | length }}"
+      ansible.builtin.set_fact:
+        host_total: "{{ _count | int }}"
+        healthy_count: "{{ analyzed_hosts | selectattr('status', 'equalto', 'healthy') | list | length }}"
+        warning_count: "{{ analyzed_hosts | selectattr('status', 'equalto', 'warning') | list | length }}"
+        critical_count: "{{ analyzed_hosts | selectattr('status', 'equalto', 'critical') | list | length }}"
+        avg_cpu_pct: "{{ ((analyzed_hosts | map(attribute='cpu_pct') | map('float') | sum) / (_count | int)) | round(1) }}"
+        avg_memory_pct: "{{ ((analyzed_hosts | map(attribute='memory_pct') | map('float') | sum) / (_count | int)) | round(1) }}"
+        avg_disk_pct: "{{ ((analyzed_hosts | map(attribute='disk_pct') | map('float') | sum) / (_count | int)) | round(1) }}"
+        worst_host: "{{ (analyzed_hosts | sort(attribute='peak_pct', reverse=true) | first).host }}"
+        attention_hosts: >-
+          {{ analyzed_hosts | rejectattr('status', 'equalto', 'healthy')
+             | sort(attribute='peak_pct', reverse=true) | list }}
+
+    - name: Decide the fleet status
+      ansible.builtin.set_fact:
+        fleet_status: >-
+          {{ 'critical' if (critical_count | int) > 0
+             else 'degraded' if (warning_count | int) > 0
+             else 'ok' }}
+
+    - name: Show the analysis
+      ansible.builtin.debug:
+        msg:
+          - "Fleet status: {{ fleet_status | upper }}"
+          - "Hosts: {{ healthy_count }} healthy, {{ warning_count }} warning, {{ critical_count }} critical"
+          - "Averages: cpu {{ avg_cpu_pct }}%, memory {{ avg_memory_pct }}%, disk {{ avg_disk_pct }}%"
+          - "Needs attention: {{ attention_hosts | map(attribute='host') | join(', ') | default('none', true) }}"
+
+    - name: Publish the analysis for the next workflow step
+      ansible.builtin.set_stats:
+        data:
+          collection_id: "{{ collection_id }}"
+          fleet_status: "{{ fleet_status }}"
+          host_count: "{{ host_total | int }}"
+          healthy_count: "{{ healthy_count | int }}"
+          warning_count: "{{ warning_count | int }}"
+          critical_count: "{{ critical_count | int }}"
+          avg_cpu_pct: "{{ avg_cpu_pct | float }}"
+          avg_memory_pct: "{{ avg_memory_pct | float }}"
+          avg_disk_pct: "{{ avg_disk_pct | float }}"
+          worst_host: "{{ worst_host }}"
+          hosts_needing_attention: "{{ attention_hosts }}"
+        per_host: false

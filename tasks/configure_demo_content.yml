@@ -1,0 +1,139 @@
+---
+# Create the project, inventory, and job templates that the demo workflows
+# run on the demo AAP. Everything is matched by name, so reruns update in
+# place. Auth for the demo AAP comes from module_defaults on the calling
+# block.
+- name: Look up organization {{ demo_content_organization }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/organizations/?name={{ demo_content_organization | urlencode }}"
+  register: _dc_org
+
+- name: Verify organization {{ demo_content_organization }} exists
+  ansible.builtin.assert:
+    that:
+      - _dc_org.json.count == 1
+    fail_msg: "Organization '{{ demo_content_organization }}' was not found on {{ _aap_base }}."
+    quiet: true
+
+- name: Look up project {{ demo_content_project }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/projects/?name={{ demo_content_project | urlencode }}"
+  register: _dc_project_lookup
+
+# update_on_launch with a cache timeout picks up repo changes without
+# syncing before every step of a workflow run.
+- name: Create or update project {{ demo_content_project }}
+  vars:
+    _existing: "{{ _dc_project_lookup.json.results | first | default({}) }}"
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/projects/{{ (_existing.id ~ '/') if _existing else '' }}"
+    method: "{{ 'PATCH' if _existing else 'POST' }}"
+    body_format: json
+    body:
+      name: "{{ demo_content_project }}"
+      description: Playbooks for the automation orchestrator demo workflows
+      organization: "{{ _dc_org.json.results[0].id }}"
+      scm_type: git
+      scm_url: "{{ demo_content_scm_url }}"
+      scm_branch: "{{ demo_content_scm_branch }}"
+      scm_update_on_launch: true
+      scm_update_cache_timeout: 300
+    status_code: [200, 201]
+  register: _dc_project
+
+# Job templates can only reference playbooks the project has synced.
+- name: Sync project {{ demo_content_project }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/projects/{{ _dc_project.json.id }}/update/"
+    method: POST
+    status_code: [200, 201, 202]
+  register: _dc_sync
+
+- name: Wait for the project sync to finish
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/project_updates/{{ _dc_sync.json.project_update | default(_dc_sync.json.id) }}/"
+  register: _dc_sync_poll
+  until: _dc_sync_poll.json.status | default('') in ['successful', 'failed', 'error', 'canceled']
+  retries: 60
+  delay: 5
+
+- name: Verify the project synced
+  ansible.builtin.assert:
+    that:
+      - _dc_sync_poll.json.status == 'successful'
+    fail_msg: >-
+      Syncing '{{ demo_content_project }}' finished with status {{ _dc_sync_poll.json.status }}.
+      Check that {{ demo_content_scm_url }} ({{ demo_content_scm_branch }}) is reachable from the demo AAP:
+      {{ _aap_base }}/execution/jobs/project/{{ _dc_sync_poll.json.id }}/output
+    quiet: true
+
+- name: Look up inventory {{ demo_content_inventory }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/inventories/?name={{ demo_content_inventory | urlencode }}"
+  register: _dc_inventory_lookup
+
+- name: Create inventory {{ demo_content_inventory }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/inventories/"
+    method: POST
+    body_format: json
+    body:
+      name: "{{ demo_content_inventory }}"
+      description: Localhost inventory for the automation orchestrator demo workflows
+      organization: "{{ _dc_org.json.results[0].id }}"
+    status_code: 201
+  register: _dc_inventory_created
+  when: _dc_inventory_lookup.json.count == 0
+
+- name: Remember the inventory ID
+  ansible.builtin.set_fact:
+    _dc_inventory_id: >-
+      {{ _dc_inventory_lookup.json.results[0].id if _dc_inventory_lookup.json.count > 0
+         else _dc_inventory_created.json.id }}
+
+- name: Look up localhost in {{ demo_content_inventory }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/inventories/{{ _dc_inventory_id }}/hosts/?name=localhost"
+  register: _dc_host_lookup
+
+- name: Add localhost to {{ demo_content_inventory }}
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/inventories/{{ _dc_inventory_id }}/hosts/"
+    method: POST
+    body_format: json
+    body:
+      name: localhost
+      description: Runs the demo playbooks inside the execution environment
+      variables: "ansible_connection: local"
+    status_code: 201
+  when: _dc_host_lookup.json.count == 0
+
+- name: Look up the demo job templates
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/job_templates/?name={{ item.name | urlencode }}"
+  register: _dc_jt_lookup
+  loop: "{{ demo_content_job_templates }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ask_variables_on_launch lets automation orchestrator pass each step's
+# output to the next step as extra vars.
+- name: Create or update the demo job templates
+  vars:
+    _existing: "{{ item.json.results | first | default({}) }}"
+  ansible.builtin.uri:
+    url: "{{ _aap_api }}/job_templates/{{ (_existing.id ~ '/') if _existing else '' }}"
+    method: "{{ 'PATCH' if _existing else 'POST' }}"
+    body_format: json
+    body:
+      name: "{{ item.item.name }}"
+      description: "{{ item.item.description | default('') }}"
+      job_type: run
+      inventory: "{{ _dc_inventory_id }}"
+      project: "{{ _dc_project.json.id }}"
+      playbook: "{{ item.item.playbook }}"
+      ask_variables_on_launch: true
+    status_code: [200, 201]
+  loop: "{{ _dc_jt_lookup.results }}"
+  loop_control:
+    label: "{{ item.item.name }}"

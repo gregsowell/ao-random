@@ -35,6 +35,32 @@
     aap_job_poll_delay: 30
     aap_job_poll_retries: 240
 
+    # --- Demo content on the demo AAP -------------------------------------
+    # Project, inventory, and job templates the Fleet Health Demo workflow
+    # runs. The project syncs this repository.
+    demo_content_enabled: true
+    demo_content_organization: Default
+    demo_content_project: AO Demo Content
+    demo_content_scm_url: https://github.com/gregsowell/ao-random.git
+    demo_content_scm_branch: main
+    demo_content_inventory: AO Demo Inventory
+    demo_content_job_templates:
+      - name: "AO Demo | Collect Fleet Metrics"
+        playbook: playbooks/fleet/collect_metrics.yml
+        description: Generate simulated CPU, memory, and disk metrics for a fleet of hosts
+      - name: "AO Demo | Analyze Fleet Metrics"
+        playbook: playbooks/fleet/analyze_metrics.yml
+        description: Score each host and decide the overall fleet status
+      - name: "AO Demo | Remediate Hosts"
+        playbook: playbooks/fleet/remediate_hosts.yml
+        description: Simulate remediating the hosts the analysis flagged
+      - name: "AO Demo | Publish Fleet Report"
+        playbook: playbooks/fleet/publish_report.yml
+        description: Build the fleet health report and decide how to announce it
+      - name: "AO Demo | Send Notification"
+        playbook: playbooks/fleet/notify.yml
+        description: Simulate posting a notification to a chat channel
+
     # --- Automation orchestrator -----------------------------------------
     ao_validate_certs: false
     ao_login_retries: 20
@@ -56,6 +82,10 @@
       # Local files are relative to the playbook directory; the name comes
       # from the JSON when not set here.
       - file: workflows/build-ee.json
+      # Runs the demo content job templates, so it can be published and run
+      # right away.
+      - file: workflows/fleet-health-demo.json
+        publish: true
 
   tasks:
     # ======================================================================
@@ -123,6 +153,22 @@
           ansible.builtin.set_fact:
             _ao_install_job: "{{ _aap_job }}"
           when: run_ao_install | bool
+
+    # ======================================================================
+    # Demo AAP: project, inventory, and job templates for the demo workflows
+    # ======================================================================
+    - name: Configure demo content on the demo AAP
+      tags: [full, aoconfig]
+      when: demo_content_enabled | bool
+      module_defaults:
+        ansible.builtin.uri:
+          user: "{{ demo_aap_username }}"
+          password: "{{ demo_aap_password }}"
+          force_basic_auth: true
+          validate_certs: "{{ demo_aap_validate_certs }}"
+      block:
+        - name: Create the demo project, inventory, and job templates
+          ansible.builtin.import_tasks: tasks/configure_demo_content.yml
 
     # ======================================================================
     # Automation orchestrator: base configuration

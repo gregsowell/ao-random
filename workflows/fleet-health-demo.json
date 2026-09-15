@@ -1,0 +1,261 @@
+{
+  "schema_version": "2.0.0",
+  "name": "Fleet Health Demo",
+  "description": "Collect simulated fleet metrics, analyze them, remediate flagged hosts, publish a report, and route the notification by result. Pick a scenario to show each path: healthy ends all clear, degraded recovers automatically, critical escalates.",
+  "triggers": [
+    {
+      "id": "trigger_manual",
+      "type": "manual_trigger",
+      "name": "Run Fleet Health Check",
+      "parameters": {
+        "input_schema": {
+          "type": "object",
+          "required": [
+            "scenario"
+          ],
+          "properties": {
+            "scenario": {
+              "type": "string",
+              "enum": [
+                "healthy",
+                "degraded",
+                "critical",
+                "random"
+              ],
+              "default": "degraded",
+              "description": "Which path to demo: healthy ends all clear, degraded recovers automatically, critical escalates, random varies."
+            },
+            "host_count": {
+              "type": "integer",
+              "minimum": 3,
+              "maximum": 50,
+              "default": 12,
+              "description": "Number of simulated hosts."
+            }
+          }
+        }
+      },
+      "position": {
+        "x": 0,
+        "y": 200
+      }
+    }
+  ],
+  "nodes": [
+    {
+      "id": "collect_metrics",
+      "type": "aap_job_template",
+      "name": "Collect Fleet Metrics",
+      "description": "Generate CPU, memory, and disk metrics for each simulated host.",
+      "parameters": {
+        "job_template_name": "AO Demo | Collect Fleet Metrics",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "scenario": "${trigger.scenario}",
+          "host_count": "${trigger.host_count}"
+        }
+      },
+      "position": {
+        "x": 300,
+        "y": 200
+      }
+    },
+    {
+      "id": "analyze_metrics",
+      "type": "aap_job_template",
+      "name": "Analyze Fleet Metrics",
+      "description": "Score each host and decide whether the fleet is ok, degraded, or critical.",
+      "parameters": {
+        "job_template_name": "AO Demo | Analyze Fleet Metrics",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "metrics": "${collect_metrics.artifacts.metrics}",
+          "collection_id": "${collect_metrics.artifacts.collection_id}"
+        }
+      },
+      "position": {
+        "x": 600,
+        "y": 200
+      }
+    },
+    {
+      "id": "remediate_hosts",
+      "type": "aap_job_template",
+      "name": "Remediate Flagged Hosts",
+      "description": "Apply a fix to each flagged host. Hosts at 98% or higher need manual intervention.",
+      "parameters": {
+        "job_template_name": "AO Demo | Remediate Hosts",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "hosts_needing_attention": "${analyze_metrics.artifacts.hosts_needing_attention}",
+          "fleet_status": "${analyze_metrics.artifacts.fleet_status}",
+          "collection_id": "${analyze_metrics.artifacts.collection_id}"
+        }
+      },
+      "position": {
+        "x": 900,
+        "y": 200
+      }
+    },
+    {
+      "id": "publish_report",
+      "type": "aap_job_template",
+      "name": "Publish Fleet Report",
+      "description": "Combine the analysis and remediation into a report and decide the final result.",
+      "parameters": {
+        "job_template_name": "AO Demo | Publish Fleet Report",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "analysis": "${analyze_metrics.artifacts}",
+          "remediation": "${remediate_hosts.artifacts}"
+        }
+      },
+      "position": {
+        "x": 1200,
+        "y": 200
+      }
+    },
+    {
+      "id": "route_by_result",
+      "type": "switch",
+      "name": "Route by Result",
+      "description": "Choose the notification from the report's final status.",
+      "parameters": {
+        "cases": [
+          {
+            "port": "case_0",
+            "label": "All clear",
+            "condition": "${publish_report.artifacts.final_status} == 'all_clear'"
+          },
+          {
+            "port": "case_1",
+            "label": "Recovered",
+            "condition": "${publish_report.artifacts.final_status} == 'recovered'"
+          },
+          {
+            "port": "case_2",
+            "label": "Escalate",
+            "condition": "${publish_report.artifacts.final_status} == 'escalate'"
+          }
+        ],
+        "default_port": "default"
+      },
+      "position": {
+        "x": 1500,
+        "y": 200
+      }
+    },
+    {
+      "id": "notify_all_clear",
+      "type": "aap_job_template",
+      "name": "Notify: All Clear",
+      "description": "Post the healthy report to the ops reports channel.",
+      "parameters": {
+        "job_template_name": "AO Demo | Send Notification",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "severity": "info",
+          "channel": "#ops-reports",
+          "title": "Fleet healthy",
+          "message": "${publish_report.artifacts.headline}",
+          "report_id": "${publish_report.artifacts.report_id}"
+        }
+      },
+      "position": {
+        "x": 1850,
+        "y": 0
+      }
+    },
+    {
+      "id": "notify_recovered",
+      "type": "aap_job_template",
+      "name": "Notify: Auto-Remediated",
+      "description": "Tell the ops alerts channel which hosts were fixed automatically.",
+      "parameters": {
+        "job_template_name": "AO Demo | Send Notification",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "severity": "warning",
+          "channel": "#ops-alerts",
+          "title": "Fleet auto-remediated",
+          "message": "${publish_report.artifacts.headline}",
+          "report_id": "${publish_report.artifacts.report_id}"
+        }
+      },
+      "position": {
+        "x": 1850,
+        "y": 200
+      }
+    },
+    {
+      "id": "notify_escalation",
+      "type": "aap_job_template",
+      "name": "Notify: Page On-Call",
+      "description": "Page on-call for hosts that need manual intervention, or for any unexpected result.",
+      "parameters": {
+        "job_template_name": "AO Demo | Send Notification",
+        "organization_name": "Default",
+        "diff_mode": false,
+        "extra_vars": {
+          "severity": "critical",
+          "channel": "#oncall",
+          "title": "Fleet needs manual intervention",
+          "message": "${publish_report.artifacts.headline}",
+          "report_id": "${publish_report.artifacts.report_id}"
+        }
+      },
+      "position": {
+        "x": 1850,
+        "y": 400
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "trigger_manual",
+      "to": "collect_metrics"
+    },
+    {
+      "from": "collect_metrics",
+      "to": "analyze_metrics"
+    },
+    {
+      "from": "analyze_metrics",
+      "to": "remediate_hosts"
+    },
+    {
+      "from": "remediate_hosts",
+      "to": "publish_report"
+    },
+    {
+      "from": "publish_report",
+      "to": "route_by_result"
+    },
+    {
+      "from": "route_by_result",
+      "to": "notify_all_clear",
+      "from_port": "case_0"
+    },
+    {
+      "from": "route_by_result",
+      "to": "notify_recovered",
+      "from_port": "case_1"
+    },
+    {
+      "from": "route_by_result",
+      "to": "notify_escalation",
+      "from_port": "case_2"
+    },
+    {
+      "from": "route_by_result",
+      "to": "notify_escalation",
+      "from_port": "default"
+    }
+  ]
+}

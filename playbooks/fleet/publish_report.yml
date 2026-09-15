@@ -1,0 +1,100 @@
+---
+# Build the fleet health report and decide how the run should be announced.
+#
+# Inputs (extra vars):
+#   analysis     artifacts from Analyze Fleet Metrics (required). A mapping,
+#                or the same mapping serialized as JSON or YAML.
+#   remediation  artifacts from Remediate Hosts (optional, same formats)
+#   report_dir   where to write the report file (default: /tmp)
+#
+# Artifacts (set_stats): report_id, final_status (all_clear | recovered |
+# escalate), fleet_status, headline, report_path, report_markdown
+- name: Publish the fleet health report
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    analysis: {}
+    remediation: {}
+    report_dir: /tmp
+
+  tasks:
+    - name: Normalize the report inputs
+      ansible.builtin.set_fact:
+        report_analysis: "{{ (analysis | from_yaml) if analysis is string else analysis }}"
+        report_remediation: "{{ (remediation | from_yaml) if remediation is string else remediation }}"
+
+    - name: Verify the analysis was provided
+      ansible.builtin.assert:
+        that:
+          - report_analysis.fleet_status is defined
+        fail_msg: >-
+          No analysis provided. Pass the "AO Demo | Analyze Fleet Metrics"
+          artifacts as the analysis extra var.
+        quiet: true
+
+    # all_clear: nothing was wrong. recovered: remediation fixed every
+    # flagged host. escalate: anything else needs a person.
+    - name: Decide the final status
+      ansible.builtin.set_fact:
+        report_id: "report-{{ report_analysis.collection_id | default('manual-run') }}"
+        final_status: >-
+          {{ 'all_clear' if report_analysis.fleet_status == 'ok'
+             else 'recovered' if (report_remediation.remediation_status | default('')) == 'completed'
+             else 'escalate' }}
+
+    - name: Write the headline
+      ansible.builtin.set_fact:
+        headline: >-
+          {{ {
+               'all_clear': 'Fleet healthy: all ' ~ report_analysis.host_count ~ ' hosts are within thresholds.',
+               'recovered': 'Fleet recovered: ' ~ (report_remediation.remediated_count | default(0)) ~ ' host(s) were remediated automatically.',
+               'escalate': 'Escalation: ' ~ (report_remediation.manual_count | default(0)) ~ ' host(s) need manual intervention.'
+             }[final_status] }}
+
+    - name: Render the report
+      ansible.builtin.set_fact:
+        report_markdown: |
+          # Fleet health report: {{ report_id }}
+
+          **Result:** {{ final_status | replace('_', ' ') | upper }}
+          {{ headline }}
+
+          | Measure | Value |
+          |---|---|
+          | Fleet status | {{ report_analysis.fleet_status }} |
+          | Hosts | {{ report_analysis.host_count }} |
+          | Healthy / warning / critical | {{ report_analysis.healthy_count }} / {{ report_analysis.warning_count }} / {{ report_analysis.critical_count }} |
+          | Average CPU | {{ report_analysis.avg_cpu_pct }}% |
+          | Average memory | {{ report_analysis.avg_memory_pct }}% |
+          | Average disk | {{ report_analysis.avg_disk_pct }}% |
+          | Worst host | {{ report_analysis.worst_host }} |
+
+          ## Remediation
+          {% for action in report_remediation.actions | default([]) %}
+          - {{ action.host }}: {{ action.action }} ({{ action.metric }} {{ action.peak_before_pct }}% to {{ action.peak_after_pct }}%), {{ action.result | replace('_', ' ') }}
+          {% else %}
+          - No remediation was needed.
+          {% endfor %}
+
+    - name: Write the report file
+      ansible.builtin.copy:
+        content: "{{ report_markdown }}"
+        dest: "{{ report_dir }}/{{ report_id }}.md"
+        mode: "0644"
+
+    - name: Show the report
+      ansible.builtin.debug:
+        msg: "{{ report_markdown.splitlines() }}"
+
+    - name: Publish the report for the next workflow step
+      ansible.builtin.set_stats:
+        data:
+          report_id: "{{ report_id }}"
+          final_status: "{{ final_status }}"
+          fleet_status: "{{ report_analysis.fleet_status }}"
+          headline: "{{ headline }}"
+          report_path: "{{ report_dir }}/{{ report_id }}.md"
+          report_markdown: "{{ report_markdown }}"
+        per_host: false

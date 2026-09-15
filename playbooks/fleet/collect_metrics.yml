@@ -1,0 +1,95 @@
+---
+# Generate simulated host metrics for the fleet health demo.
+#
+# Inputs (extra vars, all optional):
+#   scenario    healthy | degraded | critical | random (default: degraded)
+#   host_count  number of hosts to simulate (default: 12)
+#
+# Artifacts (set_stats): collection_id, collected_at, scenario, host_count,
+# metrics
+- name: Collect fleet metrics
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    scenario: degraded
+    host_count: 12
+    simulated_latency_seconds: 2
+    fleet_environments: [prod, staging, dev]
+    fleet_roles: [web, app, db, cache]
+    # Each host's cpu, memory, and disk usage falls between base and
+    # base + spread. hot pins specific hosts' disk usage so each scenario
+    # reliably produces its status: degraded has warnings only, critical
+    # has one host past the point where remediation can fix it.
+    scenario_profiles:
+      healthy: {base: 12, spread: 48, hot: {}}
+      degraded: {base: 15, spread: 50, hot: {"3": 86, "8": 89}}
+      critical: {base: 20, spread: 55, hot: {"2": 99, "5": 91, "9": 96}}
+      random: {base: 5, spread: 94, hot: {}}
+
+  tasks:
+    - name: Validate the requested scenario
+      ansible.builtin.assert:
+        that:
+          - scenario in scenario_profiles
+          - host_count | int >= 1
+        fail_msg: >-
+          scenario must be one of {{ scenario_profiles | list | join(', ') }}
+          and host_count must be at least 1.
+        quiet: true
+
+    - name: Start a collection run
+      ansible.builtin.set_fact:
+        collection_id: "fleet-{{ now(utc=true, fmt='%Y%m%d-%H%M%S') }}"
+        collected_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+        fleet_profile: "{{ scenario_profiles[scenario] }}"
+        fleet_metrics: []
+
+    - name: Query the monitoring API (simulated)
+      ansible.builtin.pause:
+        seconds: "{{ simulated_latency_seconds | int }}"
+
+    - name: Build a metrics sample for each host
+      vars:
+        _seed: "{{ collection_id }}-{{ host_index }}"
+        _base: "{{ fleet_profile.base | int }}"
+        _spread: "{{ fleet_profile.spread | int }}"
+        _hot: "{{ fleet_profile.hot[host_index | string] | default(-1) }}"
+        _role: "{{ fleet_roles[(host_index - 1) % (fleet_roles | length)] }}"
+        _env: "{{ fleet_environments[(host_index - 1) % (fleet_environments | length)] }}"
+      ansible.builtin.set_fact:
+        fleet_metrics: >-
+          {{ fleet_metrics + [{
+               'host': _role ~ '-' ~ _env ~ '-' ~ ('%02d' | format(host_index)),
+               'environment': _env,
+               'role': _role,
+               'cpu_pct': (_base | int) + ((_spread | int) | random(seed=_seed ~ '-cpu')),
+               'memory_pct': (_base | int) + ((_spread | int) | random(seed=_seed ~ '-memory')),
+               'disk_pct': (_hot | int) if (_hot | int) >= 0
+                           else (_base | int) + ((_spread | int) | random(seed=_seed ~ '-disk')),
+               'uptime_days': 365 | random(seed=_seed ~ '-uptime')
+             }] }}
+      loop: "{{ range(1, (host_count | int) + 1) | list }}"
+      loop_control:
+        loop_var: host_index
+        label: "host {{ host_index }}"
+
+    - name: Show the collected metrics
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.host }}: cpu {{ item.cpu_pct }}%, memory {{ item.memory_pct }}%,
+          disk {{ item.disk_pct }}%, up {{ item.uptime_days }} days
+      loop: "{{ fleet_metrics }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Publish the metrics for the next workflow step
+      ansible.builtin.set_stats:
+        data:
+          collection_id: "{{ collection_id }}"
+          collected_at: "{{ collected_at }}"
+          scenario: "{{ scenario }}"
+          host_count: "{{ fleet_metrics | length }}"
+          metrics: "{{ fleet_metrics }}"
+        per_host: false

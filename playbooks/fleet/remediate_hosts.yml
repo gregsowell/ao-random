@@ -1,0 +1,99 @@
+---
+# Simulate remediating the hosts that the analysis flagged.
+#
+# Inputs (extra vars):
+#   hosts_needing_attention  flagged hosts from Analyze Fleet Metrics. A
+#                            list, or the same list serialized as JSON or
+#                            YAML. Empty means nothing to do.
+#   fleet_status             status from the analysis (optional)
+#   collection_id            run identifier (optional)
+#   manual_intervention_threshold
+#                            hosts at or above this peak percentage can't be
+#                            fixed automatically (default: 98)
+#
+# Artifacts (set_stats): collection_id, remediation_status (nothing_to_do |
+# completed | needs_manual_intervention), remediated_count, manual_count,
+# actions
+- name: Remediate flagged hosts
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    hosts_needing_attention: []
+    fleet_status: unknown
+    collection_id: manual-run
+    manual_intervention_threshold: 98
+    remediation_playbook:
+      cpu: Restart the runaway worker process
+      memory: Flush the application cache
+      disk: Rotate and compress application logs
+
+  tasks:
+    - name: Normalize the remediation input
+      ansible.builtin.set_fact:
+        remediation_targets: >-
+          {{ (hosts_needing_attention | from_yaml)
+             if hosts_needing_attention is string else hosts_needing_attention }}
+        remediation_results: []
+
+    - name: Report when there is nothing to remediate
+      ansible.builtin.debug:
+        msg: "Fleet status is {{ fleet_status }}. No hosts need remediation."
+      when: remediation_targets | length == 0
+
+    - name: Apply remediation (simulated)
+      ansible.builtin.pause:
+        seconds: 2
+      when: remediation_targets | length > 0
+
+    - name: Record the result for each host
+      vars:
+        _peak: "{{ item.peak_pct | float }}"
+        _manual: "{{ (_peak | float) >= (manual_intervention_threshold | float) }}"
+        # Successful remediation brings the peak down to 55-74% of its value.
+        _after: "{{ ((_peak | float) * (55 + (20 | random(seed=collection_id ~ '-' ~ item.host))) / 100) | round(1) }}"
+      ansible.builtin.set_fact:
+        remediation_results: >-
+          {{ remediation_results + [{
+               'host': item.host,
+               'status_before': item.status,
+               'metric': item.primary_metric,
+               'action': remediation_playbook[item.primary_metric],
+               'peak_before_pct': _peak | float,
+               'peak_after_pct': (_peak | float) if (_manual | bool) else (_after | float),
+               'result': 'needs_manual_intervention' if (_manual | bool) else 'remediated'
+             }] }}
+      loop: "{{ remediation_targets }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Summarize the remediation
+      vars:
+        _manual_results: "{{ remediation_results | selectattr('result', 'equalto', 'needs_manual_intervention') | list }}"
+      ansible.builtin.set_fact:
+        remediated_count: "{{ remediation_results | selectattr('result', 'equalto', 'remediated') | list | length }}"
+        manual_count: "{{ _manual_results | length }}"
+        remediation_status: >-
+          {{ 'nothing_to_do' if (remediation_results | length) == 0
+             else 'needs_manual_intervention' if (_manual_results | length) > 0
+             else 'completed' }}
+
+    - name: Show the remediation results
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.host }}: {{ item.action }} ({{ item.metric }} {{ item.peak_before_pct }}% to
+          {{ item.peak_after_pct }}%), {{ item.result | replace('_', ' ') }}
+      loop: "{{ remediation_results }}"
+      loop_control:
+        label: "{{ item.host }}"
+
+    - name: Publish the remediation results for the next workflow step
+      ansible.builtin.set_stats:
+        data:
+          collection_id: "{{ collection_id }}"
+          remediation_status: "{{ remediation_status }}"
+          remediated_count: "{{ remediated_count | int }}"
+          manual_count: "{{ manual_count | int }}"
+          actions: "{{ remediation_results }}"
+        per_host: false

@@ -107,7 +107,7 @@
 # Publishing fails validation until the referenced AAP job templates,
 # LLM, and MCP integrations exist, so a failure here only warns.
 - name: Publish workflow {{ _wf_definition.name }}
-  when: ao_publish_workflows | bool
+  when: workflow.publish | default(ao_publish_workflows) | bool
   block:
     - name: List versions of {{ _wf_definition.name }}
       ansible.builtin.uri:

@@ -1,0 +1,64 @@
+---
+# Simulate sending a chat notification about the fleet report.
+#
+# Inputs (extra vars, all optional):
+#   severity   info | warning | critical (default: info)
+#   channel    chat channel (default: #ops-reports)
+#   title      notification title
+#   message    notification body
+#   report_id  report this notification is about
+#
+# Artifacts (set_stats): notification_id, delivered, channel, severity,
+# title, message, report_id, sent_at
+- name: Send a fleet notification
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    severity: info
+    channel: "#ops-reports"
+    title: Fleet health report
+    message: No message provided.
+    report_id: manual-run
+    severity_markers:
+      info: "[OK]"
+      warning: "[WARN]"
+      critical: "[PAGE]"
+
+  tasks:
+    - name: Build the notification
+      ansible.builtin.set_fact:
+        notification:
+          notification_id: "ntf-{{ now(utc=true, fmt='%Y%m%d%H%M%S') }}-{{ 9999 | random }}"
+          channel: "{{ channel }}"
+          severity: "{{ severity }}"
+          title: "{{ severity_markers[severity] | default('[INFO]') }} {{ title }}"
+          message: "{{ message }}"
+          report_id: "{{ report_id }}"
+          sent_at: "{{ now(utc=true, fmt='%Y-%m-%dT%H:%M:%SZ') }}"
+
+    - name: Post to the chat service (simulated)
+      ansible.builtin.pause:
+        seconds: 1
+
+    - name: Show the notification
+      ansible.builtin.debug:
+        msg:
+          - "To {{ notification.channel }} ({{ notification.severity }})"
+          - "{{ notification.title }}"
+          - "{{ notification.message }}"
+          - "Report: {{ notification.report_id }}"
+
+    - name: Publish the delivery receipt
+      ansible.builtin.set_stats:
+        data:
+          notification_id: "{{ notification.notification_id }}"
+          delivered: true
+          channel: "{{ notification.channel }}"
+          severity: "{{ notification.severity }}"
+          title: "{{ notification.title }}"
+          message: "{{ notification.message }}"
+          report_id: "{{ notification.report_id }}"
+          sent_at: "{{ notification.sent_at }}"
+        per_host: false

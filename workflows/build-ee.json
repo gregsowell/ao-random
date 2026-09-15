@@ -165,8 +165,8 @@
         "organization_name": "Default"
       },
       "position": {
-        "x": 1535.307906310413,
-        "y": 210.13573295437877
+        "x": 1932.6755019413933,
+        "y": 248.3169610043306
       }
     },
     {
@@ -183,6 +183,24 @@
       "position": {
         "x": 1867.0381405343805,
         "y": 464.8874330871039
+      }
+    },
+    {
+      "id": "activity_d8aba174_a616_4949_b943_b5c6eb64ed7e",
+      "type": "approval",
+      "name": "Human Approval",
+      "parameters": {
+        "prompt": "Approve the AI modified execution-environments.yml file.",
+        "fallback_decision": "reject",
+        "decision_window": 14400,
+        "approver_users": [
+          "admin"
+        ]
+      },
+      "settings": {},
+      "position": {
+        "x": 1535.7338393425082,
+        "y": -123.90731973728454
       }
     },
     {
@@ -243,17 +261,24 @@
         "x": 685.0264776325732,
         "y": -83.56839356278786
       }
+    },
+    {
+      "id": "logic_1789445726478_h3h3f6ko59bc",
+      "type": "condition",
+      "name": "Did AI Modify EE Files",
+      "parameters": {
+        "condition": "${logic_1789340034805_1o3g9vu1ttx2ug.iteration_count} > 1"
+      },
+      "position": {
+        "x": 1245.8393300743553,
+        "y": 28.817592462522896
+      }
     }
   ],
   "edges": [
     {
       "from": "activity_dae50503_a40d_4234_b92f_c2b347df308e",
       "to": "logic_1789339570259_rjcvr51orj185"
-    },
-    {
-      "from": "logic_1789339570259_rjcvr51orj185",
-      "to": "activity_bb01453b_c9ce_4aa0_88b3_2839ddf3c7bd",
-      "from_port": "true"
     },
     {
       "from": "activity_13820a42_f14b_444b_a476_ddb89611320d",
@@ -282,6 +307,31 @@
       "from": "logic_1789340034805_1o3g9vu1ttx2ug",
       "to": "activity_fabc4997_b542_48ef_b4a3_2dfdf63934f2",
       "from_port": "complete"
+    },
+    {
+      "from": "logic_1789339570259_rjcvr51orj185",
+      "to": "logic_1789445726478_h3h3f6ko59bc",
+      "from_port": "true"
+    },
+    {
+      "from": "logic_1789445726478_h3h3f6ko59bc",
+      "to": "activity_bb01453b_c9ce_4aa0_88b3_2839ddf3c7bd",
+      "from_port": "false"
+    },
+    {
+      "from": "logic_1789445726478_h3h3f6ko59bc",
+      "to": "activity_d8aba174_a616_4949_b943_b5c6eb64ed7e",
+      "from_port": "true"
+    },
+    {
+      "from": "activity_d8aba174_a616_4949_b943_b5c6eb64ed7e",
+      "to": "activity_bb01453b_c9ce_4aa0_88b3_2839ddf3c7bd",
+      "from_port": "approved"
+    },
+    {
+      "from": "activity_d8aba174_a616_4949_b943_b5c6eb64ed7e",
+      "to": "activity_fabc4997_b542_48ef_b4a3_2dfdf63934f2",
+      "from_port": "rejected"
     }
   ]
 }

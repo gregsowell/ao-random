@@ -102,7 +102,7 @@ under `full`.
   - The CVE demo calls *CVE - Fetch and Commit*, *CVE - Sync and Deploy Remediation*, and
     *CVE - Notify Mattermost Investigation*. Its Task agent steps also need an LLM provider
     and the Lightspeed and AAP MCP integrations.
-  - Build-EE is a visual demo: its three AAP steps all call *Demo Job Template*, and its AI
+  - Build-EE is a visual demo: its four AAP steps all call *Demo Job Template*, and its AI
     repair step needs an LLM provider.
 
 ## Built against

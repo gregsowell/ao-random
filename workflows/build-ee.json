@@ -20,8 +20,8 @@
         }
       },
       "position": {
-        "x": -546,
-        "y": -108
+        "x": 0,
+        "y": 194.75
       }
     }
   ],
@@ -149,8 +149,8 @@
       },
       "settings": {},
       "position": {
-        "x": 850.2108289176299,
-        "y": -141.25875756947184
+        "x": 1443.923100701157,
+        "y": 478.48208891421325
       }
     },
     {
@@ -165,8 +165,8 @@
         "organization_name": "Default"
       },
       "position": {
-        "x": 826.3944463222165,
-        "y": -305.0236842882906
+        "x": 1535.307906310413,
+        "y": 210.13573295437877
       }
     },
     {
@@ -174,15 +174,15 @@
       "type": "aap_job_template",
       "name": "Update execution-environment.yml",
       "parameters": {
-        "job_template_id": 6,
+        "diff_mode": false,
         "integration_id": "a711be1e-50d5-493c-87ac-cf2c599fc4db",
-        "organization_name": "Default",
+        "job_template_id": 6,
         "job_template_name": "Demo Job Template",
-        "diff_mode": false
+        "organization_name": "Default"
       },
       "position": {
-        "x": 1287.5978168825254,
-        "y": -179.791117358135
+        "x": 1867.0381405343805,
+        "y": 464.8874330871039
       }
     },
     {
@@ -197,8 +197,8 @@
         "organization_name": "Default"
       },
       "position": {
-        "x": 142.51834421861128,
-        "y": -105.69457017254399
+        "x": 680,
+        "y": 245.75
       }
     },
     {
@@ -209,8 +209,8 @@
         "condition": "${activity_dae50503_a40d_4234_b92f_c2b347df308e.job_status} == 'successful'"
       },
       "position": {
-        "x": 459.9901480989819,
-        "y": -218.9358019453033
+        "x": 960,
+        "y": 245.75
       }
     },
     {
@@ -220,12 +220,28 @@
       "parameters": {
         "type": "do_while",
         "condition": "(${logic_1789339570259_rjcvr51orj185.evaluated_result} == false or ${logic_1789340034805_1o3g9vu1ttx2ug.iteration_count} == 0)",
-        "max_iterations": 10
+        "max_iterations": 8
       },
       "settings": {},
       "position": {
-        "x": -255,
-        "y": -155.109375
+        "x": 360,
+        "y": 145.75
+      }
+    },
+    {
+      "id": "activity_fabc4997_b542_48ef_b4a3_2dfdf63934f2",
+      "type": "aap_job_template",
+      "name": "EE Build Failed - Send Notification",
+      "parameters": {
+        "job_template_id": 6,
+        "integration_id": "a711be1e-50d5-493c-87ac-cf2c599fc4db",
+        "organization_name": "Default",
+        "job_template_name": "Demo Job Template",
+        "diff_mode": false
+      },
+      "position": {
+        "x": 685.0264776325732,
+        "y": -83.56839356278786
       }
     }
   ],
@@ -261,6 +277,11 @@
       "from": "activity_d6165c70_43f0_46a9_acd1_fc8a94027621",
       "to": "logic_1789340034805_1o3g9vu1ttx2ug",
       "to_port": "iterate"
+    },
+    {
+      "from": "logic_1789340034805_1o3g9vu1ttx2ug",
+      "to": "activity_fabc4997_b542_48ef_b4a3_2dfdf63934f2",
+      "from_port": "complete"
     }
   ]
 }

@@ -190,7 +190,7 @@
       "type": "approval",
       "name": "Human Approval",
       "parameters": {
-        "prompt": "Approve the AI modified execution-environments.yml file.",
+        "prompt": "Approve the AI modified execution-environment.yml file.",
         "fallback_decision": "reject",
         "decision_window": 14400,
         "approver_users": [

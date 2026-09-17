@@ -5,9 +5,10 @@
 - name: Look up job template {{ _jt_name }}
   ansible.builtin.uri:
     url: "{{ _aap_api }}/job_templates/?name={{ _jt_name | urlencode }}"
-    user: "{{ demo_aap_username }}"
-    password: "{{ demo_aap_password }}"
-    force_basic_auth: true
+    user: "{{ _aap_user }}"
+    password: "{{ _aap_pass }}"
+    force_basic_auth: "{{ _aap_basic }}"
+    headers: "{{ _aap_headers }}"
     validate_certs: "{{ demo_aap_validate_certs }}"
   register: _jt_lookup
   # Templates created by the APD setup can take a moment to appear.
@@ -30,9 +31,10 @@
   ansible.builtin.uri:
     url: "{{ _aap_api }}/job_templates/{{ _jt_lookup.json.results[0].id }}/launch/"
     method: POST
-    user: "{{ demo_aap_username }}"
-    password: "{{ demo_aap_password }}"
-    force_basic_auth: true
+    user: "{{ _aap_user }}"
+    password: "{{ _aap_pass }}"
+    force_basic_auth: "{{ _aap_basic }}"
+    headers: "{{ _aap_headers }}"
     validate_certs: "{{ demo_aap_validate_certs }}"
     body_format: json
     body:
@@ -47,9 +49,10 @@
 - name: Wait for job {{ _jt_launch.json.job }} to finish
   ansible.builtin.uri:
     url: "{{ _aap_api }}/jobs/{{ _jt_launch.json.job }}/"
-    user: "{{ demo_aap_username }}"
-    password: "{{ demo_aap_password }}"
-    force_basic_auth: true
+    user: "{{ _aap_user }}"
+    password: "{{ _aap_pass }}"
+    force_basic_auth: "{{ _aap_basic }}"
+    headers: "{{ _aap_headers }}"
     validate_certs: "{{ demo_aap_validate_certs }}"
   register: _job_poll
   until: _job_poll.json.status | default('') in ['successful', 'failed', 'error', 'canceled']

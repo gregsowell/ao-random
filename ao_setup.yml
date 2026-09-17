@@ -18,6 +18,9 @@
   vars:
     # --- Demo AAP ---------------------------------------------------------
     demo_aap_username: admin
+    # Set demo_aap_token to authenticate to the demo AAP with an OAuth token
+    # instead of a password. The AO credential then stores the token as well.
+    demo_aap_token: ""
     demo_aap_validate_certs: false
 
     apd_setup_template: "APD | Single demo setup"
@@ -106,8 +109,8 @@
           ansible.builtin.assert:
             that:
               - demo_aap_url | default('') | trim | length > 0
-              - demo_aap_password | default('') | length > 0
-            fail_msg: Supply demo_aap_url and demo_aap_password at run time.
+              - (demo_aap_password | default('') | length > 0) or (demo_aap_token | default('') | length > 0)
+            fail_msg: Supply demo_aap_url and either demo_aap_password or demo_aap_token at run time.
             quiet: true
 
         - name: Normalize the demo AAP URL
@@ -127,6 +130,17 @@
         - name: Set the automation controller API base
           ansible.builtin.set_fact:
             _aap_api: "{{ _aap_base }}{{ '/api/controller/v2' if _aap_ping.status == 200 else '/api/v2' }}"
+
+        # A token sends a Bearer header and no basic auth; a password sends
+        # basic auth and no header. Empty user and password mean the uri
+        # module sends no Authorization of its own.
+        - name: Set the demo AAP authentication
+          ansible.builtin.set_fact:
+            _aap_user: "{{ '' if demo_aap_token | length > 0 else demo_aap_username }}"
+            _aap_pass: "{{ '' if demo_aap_token | length > 0 else demo_aap_password }}"
+            _aap_basic: "{{ demo_aap_token | length == 0 }}"
+            _aap_headers: "{{ {'Authorization': 'Bearer ' ~ demo_aap_token} if demo_aap_token | length > 0 else {} }}"
+          no_log: true
 
     # ======================================================================
     # Demo AAP: run the APD setup and the AO install
@@ -170,9 +184,10 @@
       when: demo_content_enabled | bool
       module_defaults:
         ansible.builtin.uri:
-          user: "{{ demo_aap_username }}"
-          password: "{{ demo_aap_password }}"
-          force_basic_auth: true
+          user: "{{ _aap_user }}"
+          password: "{{ _aap_pass }}"
+          force_basic_auth: "{{ _aap_basic }}"
+          headers: "{{ _aap_headers }}"
           validate_certs: "{{ demo_aap_validate_certs }}"
       block:
         - name: Create the demo project, inventory, and job templates
@@ -194,18 +209,20 @@
             - name: Look up job template {{ ao_install_template }}
               ansible.builtin.uri:
                 url: "{{ _aap_api }}/job_templates/?name={{ ao_install_template | urlencode }}"
-                user: "{{ demo_aap_username }}"
-                password: "{{ demo_aap_password }}"
-                force_basic_auth: true
+                user: "{{ _aap_user }}"
+                password: "{{ _aap_pass }}"
+                force_basic_auth: "{{ _aap_basic }}"
+                headers: "{{ _aap_headers }}"
                 validate_certs: "{{ demo_aap_validate_certs }}"
               register: _install_jt
 
             - name: Look up the last successful install job
               ansible.builtin.uri:
                 url: "{{ _aap_api }}/job_templates/{{ _install_jt.json.results[0].id }}/jobs/?status=successful&order_by=-finished&page_size=1"
-                user: "{{ demo_aap_username }}"
-                password: "{{ demo_aap_password }}"
-                force_basic_auth: true
+                user: "{{ _aap_user }}"
+                password: "{{ _aap_pass }}"
+                force_basic_auth: "{{ _aap_basic }}"
+                headers: "{{ _aap_headers }}"
                 validate_certs: "{{ demo_aap_validate_certs }}"
               register: _install_jobs
               when: _install_jt.json.count | default(0) == 1
@@ -226,9 +243,10 @@
         - name: Read the access information from the install job
           ansible.builtin.uri:
             url: "{{ _aap_api }}/jobs/{{ _ao_install_job.id }}/job_events/?event=runner_on_ok&task={{ ao_access_task | urlencode }}&order_by=-counter&page_size=1"
-            user: "{{ demo_aap_username }}"
-            password: "{{ demo_aap_password }}"
-            force_basic_auth: true
+            user: "{{ _aap_user }}"
+            password: "{{ _aap_pass }}"
+            force_basic_auth: "{{ _aap_basic }}"
+            headers: "{{ _aap_headers }}"
             validate_certs: "{{ demo_aap_validate_certs }}"
           register: _access_events
           when: ao_url | length == 0
@@ -374,13 +392,20 @@
             _host_key: "{{ _ao_cred_fields | select('search', '(?i)host|url|endpoint|server|address') | first | default('') }}"
             _user_key: "{{ _ao_cred_fields | select('search', '(?i)user') | first | default('') }}"
             _pass_key: "{{ _ao_cred_fields | select('search', '(?i)passw') | first | default('') }}"
+            _token_key: "{{ _ao_cred_fields | select('search', '(?i)token') | first | default('') }}"
             _verify_key: "{{ _ao_cred_fields | select('search', '(?i)verify|ssl|tls') | first | default('') }}"
+            # The type treats a token and a username/password pair as mutually
+            # exclusive, so send one or the other, never both.
+            _auth_inputs: >-
+              {{ {_token_key: demo_aap_token}
+                 if (demo_aap_token | length > 0 and _token_key | length > 0)
+                 else (({_user_key: demo_aap_username} if _user_key else {})
+                       | combine({_pass_key: demo_aap_password} if _pass_key else {})) }}
           ansible.builtin.set_fact:
             _ao_cred_inputs: >-
               {{ ao_aap_credential_inputs | default(
                    ({_host_key: _aap_base} if _host_key else {})
-                   | combine({_user_key: demo_aap_username} if _user_key else {})
-                   | combine({_pass_key: demo_aap_password} if _pass_key else {})
+                   | combine(_auth_inputs)
                    | combine({_verify_key: ao_aap_credential_verify_ssl | bool} if _verify_key else {}),
                    true) }}
           no_log: true
@@ -394,10 +419,12 @@
               - _ao_cred_inputs | length > 0
               - >-
                 ao_aap_credential_inputs is defined
+                or (demo_aap_token | length > 0
+                    and _ao_cred_fields | select('search', '(?i)token') | list | length > 0)
                 or (_ao_cred_fields | select('search', '(?i)user') | list | length > 0
                     and _ao_cred_fields | select('search', '(?i)passw') | list | length > 0)
             fail_msg: >-
-              Could not map the demo AAP username and password onto the credential type's input fields
+              Could not map the demo AAP credentials onto the credential type's input fields
               ({{ _ao_cred_fields | join(', ') | default('(none)', true) }}).
               Input schema: {{ _ao_cred_input_schema }}.
               Set ao_aap_credential_inputs to the correct field names and rerun.

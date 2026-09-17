@@ -88,8 +88,9 @@ can also be run on their own from the demo AAP; each playbook documents its inpu
 | Variable | Default | Purpose |
 |---|---|---|
 | `demo_aap_url` | *required* | Demo AAP URL. Any path is stripped; `https://` is added if missing. |
-| `demo_aap_password` | *required* | Demo AAP admin password. |
-| `demo_aap_username` | `admin` | Demo AAP user. |
+| `demo_aap_password` | *required* | Demo AAP admin password. Not needed when `demo_aap_token` is set. |
+| `demo_aap_token` | *(unset)* | AAP OAuth token to use instead of a password. API calls send it as a Bearer header, and the AO credential stores it as `oauth_token`. |
+| `demo_aap_username` | `admin` | Demo AAP user. Ignored when a token is used. |
 | `demo_aap_validate_certs` | `false` | Verify TLS for the demo AAP. |
 | `run_apd_setup` | `true` | Set `false` on reruns to skip the APD setup job. |
 | `run_ao_install` | `true` | Set `false` to skip the install and read access details from the last successful install job. |
@@ -136,8 +137,14 @@ and demo content are built for:
 ```bash
 ansible-playbook ao_setup.yml --tags aoconfig \
   -e ao_url=https://ao.10.0.50.59.nip.io -e ao_password='...' \
-  -e demo_aap_url=https://aap.example.com -e demo_aap_password='...'
+  -e demo_aap_url=https://aap.example.com -e demo_aap_token='...'
 ```
+
+`demo_aap_token` is an AAP OAuth token (create one under **Access Management > Users > your
+user > Tokens**, scope `write`). It replaces `demo_aap_password` everywhere: the controller API
+calls send it as a Bearer header, and the AO credential stores it in `oauth_token` rather than a
+username and password. Keep credentials out of shell history with a vars file:
+`-e @creds.yml`.
 
 AO must be allowed to reach that AAP. On a private network, set
 `APP_INTEGRATION_URL_ALLOWED_HOSTS` (a JSON list containing the AAP and AO hostnames) and

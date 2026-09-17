@@ -62,6 +62,14 @@
         description: Simulate posting a notification to a chat channel
 
     # --- Automation orchestrator -----------------------------------------
+    # Set ao_url and ao_password to configure an automation orchestrator this
+    # playbook did not install, such as one running on MicroShift. When ao_url
+    # is empty, the connection details are read from the install job on the
+    # demo AAP.
+    ao_url: ""
+    ao_username: admin
+    ao_password: ""
+
     ao_validate_certs: false
     ao_login_retries: 20
     ao_login_delay: 15
@@ -177,8 +185,11 @@
       tags: [full, aoconfig]
       block:
         # Runs under aoconfig, or under full with run_ao_install=false.
+        # Skipped entirely when ao_url names an existing instance.
         - name: Use the last successful install job
-          when: _ao_install_job is not defined
+          when:
+            - ao_url | length == 0
+            - _ao_install_job is not defined
           block:
             - name: Look up job template {{ ao_install_template }}
               ansible.builtin.uri:
@@ -212,7 +223,7 @@
               ansible.builtin.set_fact:
                 _ao_install_job: "{{ _install_jobs.json.results[0] }}"
 
-        - name: Read the access information from install job {{ _ao_install_job.id }}
+        - name: Read the access information from the install job
           ansible.builtin.uri:
             url: "{{ _aap_api }}/jobs/{{ _ao_install_job.id }}/job_events/?event=runner_on_ok&task={{ ao_access_task | urlencode }}&order_by=-counter&page_size=1"
             user: "{{ demo_aap_username }}"
@@ -220,6 +231,7 @@
             force_basic_auth: true
             validate_certs: "{{ demo_aap_validate_certs }}"
           register: _access_events
+          when: ao_url | length == 0
           no_log: true
 
         - name: Parse the automation orchestrator connection details
@@ -229,6 +241,7 @@
             ao_url: "{{ _lines | select('match', 'URL:') | first | default('') | regex_replace('^URL: *', '') | trim | regex_replace('/+$', '') }}"
             ao_username: "{{ _lines | select('match', 'Username:') | first | default('') | regex_replace('^Username: *', '') | trim }}"
             ao_password: "{{ _lines | select('match', 'Password:') | first | default('') | regex_replace('^Password: *', '') | trim }}"
+          when: ao_url | length == 0
           no_log: true
 
         - name: Verify the connection details were found
@@ -238,8 +251,9 @@
               - ao_username | length > 0
               - ao_password | length > 0
             fail_msg: >-
-              Could not parse URL, username, and password from the '{{ ao_access_task }}'
-              task in job {{ _ao_install_job.id }} ({{ _aap_base }}/execution/jobs/playbook/{{ _ao_install_job.id }}/output).
+              No automation orchestrator connection details. Either pass ao_url and
+              ao_password for an existing instance, or check the '{{ ao_access_task }}'
+              task output in the install job on {{ _aap_base }}.
             quiet: true
 
         - name: Show the automation orchestrator URL

@@ -100,6 +100,8 @@ can also be run on their own from the demo AAP; each playbook documents its inpu
 | `demo_content_scm_url` / `demo_content_scm_branch` | this repo / `main` | Where the demo playbooks come from. |
 | `demo_content_inventory` | `AO Demo Inventory` | Name of the inventory holding `localhost`. |
 | `demo_content_job_templates` | the five templates above | Job template names and playbooks. The names must match the workflow's steps. |
+| `ao_url` | *(discovered)* | Set to configure an AO this playbook didn't install, such as one on MicroShift. Skips reading the install job. |
+| `ao_username` / `ao_password` | `admin` / *(discovered)* | Credentials for that existing AO. |
 | `ao_validate_certs` | `false` | Verify TLS for AO. |
 | `ao_project_name` | `Default` | AO project that owns the credential and workflows. |
 | `ao_aap_credential_name` | `Demo AAP` | Name of the AAP credential created in AO. |
@@ -124,6 +126,23 @@ ansible-playbook ao_setup.yml --tags aoconfig -e demo_aap_url=... -e demo_aap_pa
 ```
 
 On a job template, set **Job tags** to `aoconfig` (or enable *Prompt on launch* for job tags).
+
+## Point it at an existing automation orchestrator
+
+Pass `ao_url` and `ao_password` to configure an AO this playbook didn't install, such as one
+running on MicroShift. The demo AAP variables still say which AAP the credential, integration,
+and demo content are built for:
+
+```bash
+ansible-playbook ao_setup.yml --tags aoconfig \
+  -e ao_url=https://ao.10.0.50.59.nip.io -e ao_password='...' \
+  -e demo_aap_url=https://aap.example.com -e demo_aap_password='...'
+```
+
+AO must be allowed to reach that AAP. On a private network, set
+`APP_INTEGRATION_URL_ALLOWED_HOSTS` (a JSON list containing the AAP and AO hostnames) and
+`APP_OIDC_ALLOW_PRIVATE_NETWORKS=true` on the AO deployments, which is what the Red Hat demo
+platform does for its own installs.
 
 ## Reruns
 

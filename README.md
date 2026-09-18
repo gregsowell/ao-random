@@ -4,6 +4,10 @@
 AAP instance and loads base configuration into it. It runs against `localhost` and uses only
 `ansible.builtin` modules, so any execution environment works.
 
+> **Want AO without OpenShift?** [ao-on-microshift/INSTRUCTIONS.md](ao-on-microshift/INSTRUCTIONS.md)
+> is a step-by-step runbook, written for an AI agent to follow, that builds AO on MicroShift in a
+> single RHEL VM and connects it to your existing AAP, with optional demo workflows.
+
 ## What it does
 
 1. **Demo AAP**: launches `APD | Single demo setup` with survey answer `demo: infrastructure`
@@ -136,7 +140,7 @@ and demo content are built for:
 
 ```bash
 ansible-playbook ao_setup.yml --tags aoconfig \
-  -e ao_url=https://ao.10.0.50.59.nip.io -e ao_password='...' \
+  -e ao_url=https://ao.example.com -e ao_password='...' \
   -e demo_aap_url=https://aap.example.com -e demo_aap_token='...'
 ```
 
